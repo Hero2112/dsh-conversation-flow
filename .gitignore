@@ -1,4 +1,4 @@
-# 依赖与构建产物
+# 依赖与构建中间产物
 node_modules/
 .tmp/
 *.log
@@ -11,3 +11,5 @@ desktop.ini
 
 # 临时探针输出
 *.tmp
+
+# 说明：dist/*.zip、releases/、dev/ 都要提交（可安装、可回滚的存档）

@@ -15,7 +15,7 @@ const tmpHome = path.join(os.tmpdir(), 'cf-harness-' + process.pid);
 process.env.DSH_HOME = tmpHome;
 await fsp.rm(tmpHome, { recursive: true, force: true });
 
-const { apply } = await import('../../conversation-flow/index.js');
+const { apply } = await import('../../dev/index.js');
 
 /* ------------------------------------------------------------------ mocks */
 

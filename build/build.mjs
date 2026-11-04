@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ID = '@local/dsh-conversation-flow';
-const outDir = resolve(here, '..', 'conversation-flow', 'client.js');
+// 开发副本；发版时整份复制到 releases/vX.Y.Z
+const outDir = resolve(here, '..', 'dev', 'client.js');
 
 const result = await build({
   entryPoints: [resolve(here, 'src', 'client.jsx')],

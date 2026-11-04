@@ -1,6 +1,7 @@
 # 变更记录 · CHANGELOG
 
-> 每次修改都单独提交，功能点用中文描述。版本号与 `conversation-flow/package.json` 保持一致。
+> 每次修改都单独提交，功能点用中文描述。版本号与插件包 `package.json` 保持一致。
+> 仓库：https://github.com/Hero2112/dsh-conversation-flow
 
 ## 1.3.0 — 节点属性真正驱动运行
 
@@ -9,7 +10,7 @@
 - **执行中状态**：`pendingAt` 记录「已驱动、等待该轮产出」，节点卡片与面板显示「⏳ 执行中」；该轮结束（`turn/end` · `completed`）后自动把结果推给全部下游通道并清除状态。
 - **不重复推送**：被驱动轮的推送与全局自动协调共用 15 秒防回环，先推节点、再走自动协调，同一次轮次只发一次。
 - **接口与工具**：`POST /api/run` 返回 `kicked/pending/sent/failed/error`；`conversation_flow` 的 `run` 会走同一路径；`state` 输出每个节点的作用、固定输出、定时与执行中状态。
-- **交付结构整理**：构建与测试从仓库外移入 `build/`，输出路径改为 `../conversation-flow/client.js`，README 与测试同步更新。
+- **仓库归档**：迁入插件库 `插件/conversation-flow/`，按 `releases/` `versions/` `dist/` `dev/` 规范组织；发布快照 `releases/v1.3.0/`、分发 zip `dist/conversation-flow-1.3.0.zip`；GitHub 仓库 https://github.com/Hero2112/dsh-conversation-flow 。
 - **测试**：Host 31 项（新增执行驱动、轮次兑现、固定输出直推、定时单窗口一次、工具 run 等）、页面渲染 6 项，全部通过。
 
 ## 1.2.0 — 节点可编辑属性

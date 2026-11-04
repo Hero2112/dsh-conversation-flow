@@ -1,45 +1,75 @@
-# DSH 对话流插件 · Conversation Flow
+# 对话流 · `@local/dsh-conversation-flow`
 
-DeepSeek Harness（DSH）Web GUI 插件：把多个对话放进一张 **React Flow** 画布，管理对话之间的**数据传输**与**协调/调度**。
+> **GitHub 仓库**：https://github.com/Hero2112/dsh-conversation-flow
+> **当前版本**：1.3.0 · **最近发布**：2026-11-04
+> **安装目录**：`releases/v1.3.0/`（冻结快照，**正在运行的就是它**）· 开发改 `dev/`
 
-- 插件包：`conversation-flow/`（可被 `plugin_manager` 安装，包名 `@local/dsh-conversation-flow`）
-- 构建与测试：`build/`（esbuild 打包出 `conversation-flow/client.js`，含两套测试）
-- 功能说明与限制：见 [conversation-flow/README.md](conversation-flow/README.md)
-- 版本历史：见 [CHANGELOG.md](CHANGELOG.md)
+DSH（DeepSeek Harness）Web GUI 插件：把多个对话放进一张 **React Flow** 画布，管理对话之间的**数据传输**与**协调调度**。
+
+- 侧边栏入口：`sidebar.panellist`（`id: conversation-flow`，排在「插件」「定时任务」之后）
+- 主面板：keyed `main` slot（`key: conversation-flow`）
+- 数据文件：`$DSH_HOME/conversation-flow/graph.json`
 
 ## 能力一览
 
 | 能力 | 说明 |
 |---|---|
-| 画布 | 节点 = 对话，连线 = 数据通道；拖拽/缩放/小地图；外观可换背景色、网格样式/间距/颜色 |
-| 建通道 | 从节点右侧圆点拖到另一个节点建立通道，一对对话只允许一条 |
+| 画布 | 节点 = 对话，连线 = 数据通道；拖拽 / 缩放 / 小地图；背景色、网格样式/间距/颜色可换并持久化 |
+| 建通道 | 从节点右侧圆点拖到另一个节点建立通道，同一对对话只允许一条 |
 | 传输内容 | 最后一轮回答 / 最近 N 轮 / 完整对话记录 / 自定义文本 |
-| 自动协调 | 源对话每轮结束（`turn/end` · `completed`）自动推送到目标对话 |
-| 节点属性驱动运行 | 节点可编辑**节点作用 / 输出内容 / 是否定时**，三者真正影响执行：作用驱动该对话、输出决定下游负载、定时决定何时执行 |
-| Agent 工具 | `conversation_flow`：list / state / node / run / transfer / link / coordinate |
-| 落盘 | 画布、通道、节点属性、定时状态都在 `$DSH_HOME/conversation-flow/graph.json` |
+| 手动传输 | 节点「发送数据」、通道「立即传输」、顶部「立即传输」，并有最近 40 条传输记录（来源：手动/自动/定时） |
+| 自动协调 | 源对话每轮结束（`turn/end` · `completed`）自动推送到目标对话，15 秒防回环 |
+| 节点属性驱动运行 | **节点作用** → 执行时投进该对话的任务指令（真正唤醒它干活）；**输出内容** → 下游固定负载；**是否定时** → 按间隔自动执行 |
+| 执行中状态 | `pendingAt` 等待本轮产出，卡片/面板显示「执行中」，本轮结束兑现推送并清除 |
+| Agent 工具 | `conversation_flow`：`list / state / node / run / transfer / link / coordinate` |
 
-## 安装到 DSH
+功能细节、限制与接口见 [dev/README.md](dev/README.md)。
 
-```powershell
-# 在 DSH 会话里用 plugin_manager 安装本目录下的插件包
-#   action: install_bundle
-#   target: <仓库路径>\conversation-flow
+## 目录结构（按插件库规范）
+
+```
+插件/conversation-flow/
+├── README.md                本文件：插件总述（阅读入口）
+├── CHANGELOG.md             版本总表
+├── versions/
+│   └── v1.3.0.md            本版说明：实现了什么 / 怎么用 / 验证程度 / 已知限制
+├── releases/
+│   └── v1.3.0/              冻结快照：完整可安装包（package.json client.js index.js cordis.patch.yml icon.svg locale/ README.md INSTALL.md）
+├── dist/
+│   └── conversation-flow-1.3.0.zip   分发包（顶层 conversation-flow/，永不覆盖）
+├── dev/                     下一版工作副本（构建产物 client.js 也输出到这里）
+└── build/                   esbuild 构建脚本 + 源码 + 测试 + API 参考文档
+    ├── src/{client.jsx,page.jsx,shared.js}
+    ├── build.mjs            → 输出 ../dev/client.js
+    ├── test/{host.test.mjs,render.smoke.mjs}
+    └── docs/                Host / Client 接口调研报告
 ```
 
-安装后侧边栏出现「对话流」图标；客户端改动刷新页面生效，Host 改动需停用/启用插件（或重启 GUI）。
+## 安装与生效
 
-## 构建与测试
+```text
+plugin_manager
+  action: install_bundle
+  target: <本仓库>\releases\v1.3.0
+```
+
+- 已装旧版：先 `remove_bundle`（target `@local/dsh-conversation-flow`），再 `install_bundle` 新目录；
+- **安装路径变化后必须完全退出并重启 DSH**（只刷新页面不够），否则侧边栏图标与面板不出现；
+- 只改 `client.js`：刷新页面即可；只改 `index.js`：停用/启用插件即可。
+
+详见 [releases/v1.3.0/INSTALL.md](releases/v1.3.0/INSTALL.md)。
+
+## 开发
 
 ```powershell
 cd build
-pnpm install      # 首次
-pnpm run build    # 生成 ../conversation-flow/client.js
-pnpm test         # Host 半 mock 测试 + 页面服务端渲染测试
+pnpm install        # 首次
+pnpm run build      # 重新生成 ../dev/client.js
+pnpm test           # Host mock 测试 31 项 + 页面服务端渲染测试 6 项
 ```
 
-当前基线：Host **31** 项、页面渲染 **6** 项，全部通过。
+发版流程：`dev/` 验证通过 → 整份复制到 `releases/vX.Y.Z/` → 写 `versions/vX.Y.Z.md` → `CHANGELOG.md` 追加 → 打包 `dist/<插件名>-vX.Y.Z.zip` → 让 Agent 安装新 release 目录。
 
 ## 提交约定
 
-以后每次修改代码都会**单独提交一次**，提交信息用中文写清楚本次新增/修改了哪些功能，并同步更新 [CHANGELOG.md](CHANGELOG.md)。
+每次修改**单独提交一次**，提交信息用中文写清楚本次新增/修改了哪些功能；同步更新 `CHANGELOG.md` 与 `versions/`；提交后推送到 GitHub 仓库。
