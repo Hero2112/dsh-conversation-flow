@@ -1,0 +1,17 @@
+{
+  "name": "dsh-conversation-flow-build",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Build tooling for the Conversation Flow DSH plugin (client bundle + tests)",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test/host.test.mjs && node test/render.smoke.mjs"
+  },
+  "devDependencies": {
+    "@xyflow/react": "12.12.1",
+    "esbuild": "0.25.10",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  }
+}
