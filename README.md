@@ -57,6 +57,8 @@ plugin_manager
 - **安装路径变化后必须完全退出并重启 DSH**（只刷新页面不够），否则侧边栏图标与面板不出现；
 - 只改 `client.js`：刷新页面即可；只改 `index.js`：停用/启用插件即可。
 
+> **本机现状**：DSH 里跑的这份是通过 `dsh-plugins/conversation-flow` 安装的，而该目录是一个指向 `插件/conversation-flow/releases/v1.3.0` 的**目录联接（junction）**。这样做是为了让"源码搬进插件库、安装路径保持稳定"，从而**不必重启 DSH** 客户端就能继续显示侧边栏图标与面板。将来重装时可直接安装 `releases/vX.Y.Z`，但那次切换需要重启 DSH。
+
 详见 [releases/v1.3.0/INSTALL.md](releases/v1.3.0/INSTALL.md)。
 
 ## 开发
