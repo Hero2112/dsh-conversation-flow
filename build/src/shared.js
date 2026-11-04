@@ -91,6 +91,18 @@ export const MESSAGES = {
     sentNow: '已推送',
     nodeRemove: '从画布移除',
     noNode: '点击画布上的节点以编辑它的作用、输出与定时',
+    topics: '主题',
+    newTopic: '新建主题',
+    renameTopic: '改名',
+    deleteTopic: '删除',
+    topicNamePlaceholder: '主题名称，例如：素材审核流水线',
+    create: '创建',
+    cancel: '取消',
+    confirm: '确定',
+    topicDeleteConfirm: '确认删除主题「{name}」？其中的节点与通道都会一起删除。',
+    topicCreated: '已创建主题「{name}」',
+    topicDeleted: '已删除主题',
+    topicRenamed: '已改名',
   },
   en: {
     title: 'Conversation Flow',
@@ -179,6 +191,18 @@ export const MESSAGES = {
     sentNow: 'Pushed',
     nodeRemove: 'Remove from canvas',
     noNode: 'Click a node to edit its role, output and timer',
+    topics: 'Topics',
+    newTopic: 'New topic',
+    renameTopic: 'Rename',
+    deleteTopic: 'Delete',
+    topicNamePlaceholder: 'Topic name, e.g. Asset review pipeline',
+    create: 'Create',
+    cancel: 'Cancel',
+    confirm: 'OK',
+    topicDeleteConfirm: 'Delete topic "{name}"? Its nodes and channels are removed too.',
+    topicCreated: 'Topic "{name}" created',
+    topicDeleted: 'Topic deleted',
+    topicRenamed: 'Renamed',
   },
 };
 
@@ -232,6 +256,7 @@ export const api = {
   setCoordinate: (payload) => request('/coordinate', { method: 'POST', body: JSON.stringify(payload) }),
   updateNode: (payload) => request('/node', { method: 'POST', body: JSON.stringify(payload) }),
   runNode: (payload) => request('/run', { method: 'POST', body: JSON.stringify(payload) }),
+  topic: (payload) => request('/topic', { method: 'POST', body: JSON.stringify(payload) }),
 };
 
 /** Design tokens copied from the Harness theme, with safe literal fallbacks. */

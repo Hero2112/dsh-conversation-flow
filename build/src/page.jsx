@@ -79,6 +79,8 @@ function flowStyles(t) {
 .cf-field::placeholder { color: ${t.textFaint}; }
 .cf-num { width: 64px; font: inherit; font-size: 11.5px; text-align: right; padding: 4px 6px; border-radius: ${t.radiusSm}; border: 1px solid ${t.border}; background: ${t.surfaceMuted}; color: ${t.text}; outline: none; }
 .cf-num:focus { border-color: ${t.accent}; }
+.cf-topic-select { font: inherit; font-size: 11.5px; padding: 4px 7px; border-radius: ${t.radiusSm}; border: 1px solid ${t.borderStrong}; background: ${t.surface}; color: ${t.text}; cursor: pointer; max-width: 260px; }
+.cf-topicbar .cf-field { font-size: 11.5px; }
 `;
 }
 
@@ -625,7 +627,7 @@ function CanvasToolbar({ t, canvas, onChange }) {
 
 /* -------------------------------------------------------------------- page */
 
-function FlowPage({ ctx, t, tokens, sessions, graph, canvas, transfers, onGraphChange, onCanvasChange, onTransfer, onToast, sessionLookup, openSession }) {
+function FlowPage({ ctx, t, tokens, sessions, graph, canvas, topics, activeTopicId, transfers, onGraphChange, onCanvasChange, onSelectTopic, onCreateTopic, onRenameTopic, onDeleteTopic, onTransfer, onToast, sessionLookup, openSession }) {
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
   const [selectedEdgeId, setSelectedEdgeId] = useState(null);
@@ -927,6 +929,12 @@ function FlowPage({ ctx, t, tokens, sessions, graph, canvas, transfers, onGraphC
 
   const canvasSessionIds = useMemo(() => new Set((graph.nodes || []).map((node) => node.sessionId)), [graph.nodes]);
 
+  const [topicDraft, setTopicDraft] = useState(null); // null | 'create' | 'rename'
+  const [topicName, setTopicName] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const activeTopic = (topics || []).find((topic) => topic.id === activeTopicId) || (topics || [])[0] || null;
+
   return (
     <div className="cf-root" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, background: TOKENS.surface }}>
       <style>{flowCss + flowStyles(TOKENS)}</style>
@@ -942,6 +950,96 @@ function FlowPage({ ctx, t, tokens, sessions, graph, canvas, transfers, onGraphC
           {sending ? t.transferring : t.transferNow}
         </button>
       </header>
+      <div className="cf-topicbar" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 16px', borderBottom: '1px solid ' + TOKENS.border, flex: 'none', background: TOKENS.surfaceMuted }}>
+        <span style={{ fontSize: 10.5, letterSpacing: '.04em', textTransform: 'uppercase', color: TOKENS.textFaint }}>{t.topics}</span>
+        <select
+          className="cf-topic-select"
+          value={activeTopicId || ''}
+          aria-label={t.topics}
+          onChange={(event) => onSelectTopic(event.target.value)}
+        >
+          {(topics || []).map((topic) => (
+            <option key={topic.id} value={topic.id}>
+              {topic.name}（{topic.nodeCount || 0}）
+            </option>
+          ))}
+        </select>
+
+        {topicDraft ? (
+          <>
+            <input
+              className="cf-field"
+              style={{ width: 190, padding: '4px 7px' }}
+              autoFocus
+              value={topicName}
+              placeholder={t.topicNamePlaceholder}
+              onChange={(event) => setTopicName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  const name = topicName.trim();
+                  if (name) {
+                    if (topicDraft === 'create') onCreateTopic(name);
+                    else onRenameTopic(name);
+                  }
+                  setTopicDraft(null);
+                  setTopicName('');
+                } else if (event.key === 'Escape') {
+                  setTopicDraft(null);
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="cf-btn primary"
+              disabled={!topicName.trim()}
+              onClick={() => {
+                const name = topicName.trim();
+                if (!name) return;
+                if (topicDraft === 'create') onCreateTopic(name);
+                else onRenameTopic(name);
+                setTopicDraft(null);
+                setTopicName('');
+              }}
+            >
+              {t.confirm}
+            </button>
+            <button type="button" className="cf-btn" onClick={() => { setTopicDraft(null); setTopicName(''); }}>
+              {t.cancel}
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" className="cf-btn" onClick={() => { setTopicDraft('create'); setTopicName(''); }}>
+              ＋ {t.newTopic}
+            </button>
+            <button
+              type="button"
+              className="cf-btn"
+              onClick={() => { setTopicDraft('rename'); setTopicName(activeTopic ? activeTopic.name : ''); }}
+            >
+              {t.renameTopic}
+            </button>
+            <button
+              type="button"
+              className={'cf-btn' + (confirmDelete ? ' danger' : '')}
+              onClick={() => {
+                if (!confirmDelete) {
+                  setConfirmDelete(true);
+                  return;
+                }
+                setConfirmDelete(false);
+                if (activeTopic) onDeleteTopic();
+              }}
+            >
+              {confirmDelete ? t.topicDeleteConfirm.replace('{name}', activeTopic ? activeTopic.name : '') : t.deleteTopic}
+            </button>
+          </>
+        )}
+
+        <span style={{ marginLeft: 'auto', fontSize: 10.5, color: TOKENS.textFaint }}>
+          {(topics || []).length} {t.topics}
+        </span>
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: '236px minmax(0, 1fr) 288px', flex: 1, minHeight: 0 }}>
         <Rail t={t} sessions={sessions} onAdd={addNode} onOpen={(session) => openSession(session.id)} canvasSessionIds={canvasSessionIds} />
         <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, position: 'relative' }}>
@@ -1032,11 +1130,14 @@ export function ConversationFlowPage({ ctx }) {
   const t = useMessages(ctx);
   const [sessions, setSessions] = useState([]);
   const [graph, setGraph] = useState({ nodes: [], edges: [] });
+  const [topics, setTopics] = useState([]);
+  const [activeTopicId, setActiveTopicId] = useState(null);
   const [transfers, setTransfers] = useState([]);
   const [toasts, setToasts] = useState([]);
   const [canvas, setCanvasState] = useState(DEFAULT_CANVAS);
   const canvasRef = useRef(DEFAULT_CANVAS);
   const graphRef = useRef({ nodes: [], edges: [] });
+  const activeTopicRef = useRef(null);
 
   const onToast = useCallback((text, isError) => {
     const id = Math.random().toString(36).slice(2);
@@ -1055,6 +1156,9 @@ export function ConversationFlowPage({ ctx }) {
   const applySnapshot = useCallback(
     (value) => {
       setSessions(value.sessions || []);
+      setTopics(value.topics || []);
+      setActiveTopicId(value.activeTopicId || null);
+      activeTopicRef.current = value.activeTopicId || null;
       const remote = {
         nodes: (value.graph && value.graph.nodes) || [],
         edges: (value.graph && value.graph.edges) || [],
@@ -1136,6 +1240,51 @@ export function ConversationFlowPage({ ctx }) {
     [applyCanvas, onToast, t],
   );
 
+  /** 主题操作：改完后立即拉一次快照，画布、选项与统计一起刷新。 */
+  const runTopicAction = useCallback(
+    async (payload) => {
+      try {
+        const value = await api.topic(payload);
+        setTopics(value.topics || []);
+        setActiveTopicId(value.activeTopicId || null);
+        activeTopicRef.current = value.activeTopicId || null;
+        await refresh();
+      } catch (error) {
+        onToast(error.message, true);
+      }
+    },
+    [refresh, onToast],
+  );
+
+  const selectTopic = useCallback(
+    (topicId) => {
+      if (!topicId || topicId === activeTopicRef.current) return;
+      runTopicAction({ action: 'select', topicId });
+    },
+    [runTopicAction],
+  );
+
+  const createTopic = useCallback(
+    async (name) => {
+      await runTopicAction({ action: 'create', name });
+      onToast(t.topicCreated.replace('{name}', name));
+    },
+    [runTopicAction, onToast, t],
+  );
+
+  const renameTopic = useCallback(
+    async (name) => {
+      await runTopicAction({ action: 'rename', topicId: activeTopicRef.current, name });
+      onToast(t.topicRenamed);
+    },
+    [runTopicAction, onToast, t],
+  );
+
+  const deleteTopic = useCallback(async () => {
+    await runTopicAction({ action: 'delete', topicId: activeTopicRef.current });
+    onToast(t.topicDeleted);
+  }, [runTopicAction, onToast, t]);
+
   return (
     <div style={{ position: 'relative', height: '100%', minHeight: 0 }}>
       <FlowPage
@@ -1145,9 +1294,15 @@ export function ConversationFlowPage({ ctx }) {
         sessions={sessions}
         graph={graph}
         canvas={canvas}
+        topics={topics}
+        activeTopicId={activeTopicId}
         transfers={transfers}
         onGraphChange={onGraphChange}
         onCanvasChange={onCanvasChange}
+        onSelectTopic={selectTopic}
+        onCreateTopic={createTopic}
+        onRenameTopic={renameTopic}
+        onDeleteTopic={deleteTopic}
         onToast={onToast}
         sessionLookup={sessionLookup}
         openSession={openSession}

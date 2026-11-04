@@ -77,6 +77,12 @@ const checks = [
       'default dark-canvas grid color is wired into the pattern',
     );
   }],
+  ['topic bar renders with create / rename / delete controls', () => {
+    assert.match(markup, /cf-topicbar/, 'topic bar container present');
+    assert.match(markup, /新建主题|New topic/, 'new-topic control present');
+    assert.match(markup, /改名|Rename/, 'rename control present');
+    assert.match(markup, /删除|Delete/, 'delete control present');
+  }],
   ['no unresolved placeholder text', () => {
     assert.equal(/\{to\}|\{reason\}|undefined<\/div>/.test(markup), false);
   }],

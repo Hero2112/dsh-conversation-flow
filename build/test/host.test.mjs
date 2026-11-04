@@ -262,9 +262,12 @@ check('graph file is written under DSH_HOME', async () => {
   const file = path.join(tmpHome, 'conversation-flow', 'graph.json');
   const raw = await fsp.readFile(file, 'utf8');
   const parsed = JSON.parse(raw);
-  assert.equal(parsed.nodes.length, 2);
-  assert.equal(parsed.edges.length, 1);
-  assert.equal(parsed.canvas.variant, 'dots', 'default canvas look is persisted');
+  assert.equal(parsed.version, 2, 'state file is the topic-aware v2 shape');
+  assert.equal(parsed.topics.length, 1, 'a fresh state owns exactly one default topic');
+  assert.equal(parsed.activeTopicId, parsed.topics[0].id);
+  assert.equal(parsed.topics[0].nodes.length, 2);
+  assert.equal(parsed.topics[0].edges.length, 1);
+  assert.equal(parsed.topics[0].canvas.variant, 'dots', 'default canvas look is persisted');
 });
 
 check('canvas look is validated, persisted and reported', async () => {
@@ -288,7 +291,7 @@ check('canvas look is validated, persisted and reported', async () => {
 
   const file = path.join(tmpHome, 'conversation-flow', 'graph.json');
   const parsed = JSON.parse(await fsp.readFile(file, 'utf8'));
-  assert.deepEqual(parsed.canvas, saved.json.value.canvas, 'canvas survives on disk');
+  assert.deepEqual(parsed.topics[0].canvas, saved.json.value.canvas, 'canvas survives on disk');
 });
 
 check('invalid canvas values fall back to safe defaults', async () => {
@@ -697,6 +700,122 @@ check('malformed JSON body is reported as an error, not a crash', async () => {
   await done;
   assert.equal(res.status, 500);
   assert.match(String(res.payload), /invalid JSON/);
+});
+
+/* ---------------------------------------------------------------- topics */
+
+check('topics: a default topic exists and is active', async () => {
+  const state = await call('GET', '/conversation-flow/api/state');
+  const value = state.json.value;
+  assert.equal(value.topics.length, 1);
+  assert.equal(value.topics[0].id, value.activeTopicId);
+  assert.equal(value.graph.topicId, value.activeTopicId);
+  assert.equal(typeof value.topics[0].name, 'string');
+  assert.ok(value.topics[0].nodeCount > 0);
+});
+
+check('topics: create / select / rename / delete keep the canvases isolated', async () => {
+  const before = await call('GET', '/conversation-flow/api/state');
+  const defaultId = before.json.value.activeTopicId;
+  const baseGraph = before.json.value.graph;
+  const baseCount = baseGraph.nodes.length;
+
+  // 主题 A 里再加一个节点
+  await call('POST', '/conversation-flow/api/graph', {
+    nodes: [...baseGraph.nodes, { id: 'topic-a-extra', sessionId: 'session-alpha', x: 1, y: 1 }],
+    edges: baseGraph.edges,
+    canvas: baseGraph.canvas,
+  });
+
+  const created = await call('POST', '/conversation-flow/api/topic', { action: 'create', name: '第二主题' });
+  assert.equal(created.status, 200);
+  assert.equal(created.json.value.topics.length, 2);
+  const secondId = created.json.value.activeTopicId;
+  assert.notEqual(secondId, defaultId);
+  assert.ok(created.json.value.topics.some((topic) => topic.name === '第二主题'));
+
+  // 新主题是空白画布
+  const fresh = await call('GET', '/conversation-flow/api/state');
+  assert.equal(fresh.json.value.graph.nodes.length, 0);
+  assert.equal(fresh.json.value.graph.topicId, secondId);
+
+  // 在新主题里放另一个节点
+  await call('POST', '/conversation-flow/api/graph', {
+    nodes: [{ id: 'topic-b-node', sessionId: 'session-beta', x: 5, y: 5 }],
+    edges: [],
+  });
+
+  // 改名
+  const renamed = await call('POST', '/conversation-flow/api/topic', {
+    action: 'rename',
+    topicId: secondId,
+    name: '第二主题·改名',
+  });
+  assert.equal(renamed.status, 200);
+  assert.ok(renamed.json.value.topics.some((topic) => topic.name === '第二主题·改名'));
+
+  // 切回默认主题，看到的是默认主题的画布（而不是第二个主题的）
+  const back = await call('POST', '/conversation-flow/api/topic', { action: 'select', topicId: defaultId });
+  assert.equal(back.status, 200);
+  const restored = await call('GET', '/conversation-flow/api/state');
+  assert.equal(restored.json.value.graph.nodes.length, baseCount + 1);
+  assert.ok(restored.json.value.graph.nodes.some((node) => node.id === 'topic-a-extra'));
+  assert.equal(restored.json.value.graph.nodes.some((node) => node.id === 'topic-b-node'), false);
+
+  // 统计与更新时间也回来了
+  assert.equal(restored.json.value.topics.length, 2);
+
+  // 删除第二个主题
+  const deleted = await call('POST', '/conversation-flow/api/topic', { action: 'delete', topicId: secondId });
+  assert.equal(deleted.status, 200);
+  assert.equal(deleted.json.value.topics.length, 1);
+
+  // 最后一个主题不允许删除
+  const guard = await call('POST', '/conversation-flow/api/topic', { action: 'delete', topicId: defaultId });
+  assert.equal(guard.status, 409);
+  assert.match(guard.json.error, /至少/);
+});
+
+check('topics: a timed node in another topic still fires', async () => {
+  agentsById.set('session-beta', makeAgent('session-beta', 'idle'));
+  const created = await call('POST', '/conversation-flow/api/topic', { action: 'create', name: '定时主题' });
+  const topicId = created.json.value.activeTopicId;
+  await call('POST', '/conversation-flow/api/graph', {
+    nodes: [
+      {
+        id: 'n-timed',
+        sessionId: 'session-beta',
+        x: 0,
+        y: 0,
+        role: '',
+        output: '定时主题的输出',
+        schedule: { enabled: true, everyMinutes: 1 },
+        lastRunAt: 0,
+      },
+      { id: 'n-target', sessionId: 'session-alpha', x: 200, y: 0 },
+    ],
+    edges: [{ id: 'e-timed', source: 'n-timed', target: 'n-target', kind: 'summary', auto: false }],
+  });
+  const before = delivered.length;
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(delivered.length, before + 1, 'the ticker runs nodes of a non-active topic');
+  assert.match(delivered[delivered.length - 1].message.content[0].text, /定时主题的输出/);
+  // 清理：删除这个主题，回到默认主题
+  const deleted = await call('POST', '/conversation-flow/api/topic', { action: 'delete', topicId });
+  assert.equal(deleted.status, 200);
+});
+
+check('tool: topics / topic actions', async () => {
+  const listed = await tools[0].execute({ action: 'topics' }, {});
+  assert.match(listed, /▶/);
+  const created = await tools[0].execute({ action: 'topic', topic_op: 'create', name: '工具主题' }, {});
+  assert.match(created, /已创建主题「工具主题」/);
+  const state = await call('GET', '/conversation-flow/api/state');
+  const topicId = state.json.value.activeTopicId;
+  const renamed = await tools[0].execute({ action: 'topic', topic_op: 'rename', topic_id: topicId, name: '工具主题·改名' }, {});
+  assert.match(renamed, /已改名/);
+  const removed = await tools[0].execute({ action: 'topic', topic_op: 'delete', topic_id: topicId }, {});
+  assert.match(removed, /已删除主题/);
 });
 
 /* ------------------------------------------------------------------- run */

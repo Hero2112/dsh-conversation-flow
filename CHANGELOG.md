@@ -3,6 +3,16 @@
 > 每次修改都单独提交，功能点用中文描述。版本号与插件包 `package.json` 保持一致。
 > 仓库：https://github.com/Hero2112/dsh-conversation-flow
 
+## 1.4.0 — 多主题画布（一个主题 = 一条工作流）
+
+- **多主题**：画布顶部新增主题条，可下拉切换、`＋新建主题`、`改名`、`删除`（二次确认；至少保留一个主题）。每个主题是一张独立画布，节点、通道、节点属性、画布外观互不干扰——等于在一个插件里管理多条工作流。
+- **跨主题运行**：定时任务、自动协调、pending 兑现遍历**所有主题**，切到别的主题也不影响其它主题的定时节点继续工作。
+- **兼容旧数据**：旧版单画布 `graph.json` 自动迁移为一个「默认主题」，节点/通道/外观原样保留；状态文件升级为 v2（`{ version: 2, activeTopicId, topics, transfers }`）。
+- **接口**：`GET /api/state` 新增 `topics`（id/名称/节点数/通道数/定时数/更新时间）与 `activeTopicId`；新增 `POST /api/topic`（create/select/rename/delete）；`/api/graph`、`/api/node`、`/api/run` 支持 `topicId`，`/api/coordinate` 按连线自动定位主题。
+- **工具**：`conversation_flow` 新增 `topics`、`topic` 两个 action；`state` 先报告当前主题；`node`/`run` 可按节点 id 或 session id 跨主题定位。
+- **测试**：Host 35 项（新增默认主题、主题增删改查与画布隔离、非当前主题的定时节点照常触发、工具主题操作）、页面渲染 7 项（新增主题条渲染），全部通过。
+- **发布**：`releases/v1.4.0/`、`versions/v1.4.0.md`、`dist/conversation-flow-1.4.0.zip`。
+
 ## 1.3.0 — 节点属性真正驱动运行
 
 - **执行语义落地**：节点的「节点作用」不再只是文字。执行节点时会把作用作为任务指令投进该节点自己的对话（`agent.followup` 唤醒它），让对话真的按职责开始工作。

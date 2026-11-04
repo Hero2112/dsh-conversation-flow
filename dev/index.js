@@ -40,7 +40,27 @@ function stateFile() {
 }
 
 function emptyState() {
-  return { version: 1, rev: 1, nodes: [], edges: [], transfers: [], canvas: defaultCanvas() };
+  const topic = newTopic('默认主题');
+  return { version: 2, rev: 1, activeTopicId: topic.id, topics: [topic], transfers: [] };
+}
+
+/** 一个主题 = 一张独立的画布（节点、通道、外观）。 */
+function newTopic(name) {
+  const now = Date.now();
+  return {
+    id: 'topic-' + randomUUID().slice(0, 8),
+    name: cleanTopicName(name) || '主题',
+    nodes: [],
+    edges: [],
+    canvas: defaultCanvas(),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function cleanTopicName(name) {
+  const text = typeof name === 'string' ? name.trim() : '';
+  return text.slice(0, 60);
 }
 
 /** Canvas presentation: `null` means "follow the Harness theme". */
@@ -121,6 +141,42 @@ function normalizeGraph(raw) {
     });
   }
   return { nodes: cleanNodes, edges: cleanEdges, canvas: normalizeCanvas(raw && raw.canvas) };
+}
+
+/** 一个主题（独立工作流画布）的安全化。 */
+function normalizeTopic(raw, fallbackName) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const graph = normalizeGraph(source);
+  const now = Date.now();
+  return {
+    id: typeof source.id === 'string' && source.id.length > 0 ? source.id : 'topic-' + randomUUID().slice(0, 8),
+    name: cleanTopicName(source.name) || fallbackName || '主题',
+    nodes: graph.nodes,
+    edges: graph.edges,
+    canvas: graph.canvas,
+    createdAt: Number.isFinite(source.createdAt) ? source.createdAt : now,
+    updatedAt: Number.isFinite(source.updatedAt) ? source.updatedAt : now,
+  };
+}
+
+/** 读盘：v2 是 topics[]；v1 只有一个画布，迁移成一个「默认主题」。 */
+function normalizeStore(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const transfers = Array.isArray(source.transfers) ? source.transfers.slice(0, MAX_TRANSFERS) : [];
+  let topics = Array.isArray(source.topics)
+    ? source.topics.map((item, index) => normalizeTopic(item, '主题 ' + (index + 1)))
+    : [];
+  if (topics.length === 0) topics = [normalizeTopic(source, '默认主题')];
+  const activeTopicId = topics.some((topic) => topic.id === source.activeTopicId)
+    ? source.activeTopicId
+    : topics[0].id;
+  return {
+    version: 2,
+    rev: Number.isFinite(source.rev) ? source.rev : 1,
+    activeTopicId,
+    topics,
+    transfers,
+  };
 }
 
 /* --------------------------------------------------------------- helpers */
@@ -226,21 +282,51 @@ export function apply(ctx, config = {}) {
     stateLoaded = true;
     try {
       const raw = await fsp.readFile(stateFile(), 'utf8');
-      const parsed = JSON.parse(raw);
-      const graph = normalizeGraph(parsed);
-      state = {
-        version: 1,
-        rev: Number.isFinite(parsed.rev) ? parsed.rev : 1,
-        nodes: graph.nodes,
-        edges: graph.edges,
-        transfers: Array.isArray(parsed.transfers) ? parsed.transfers.slice(0, MAX_TRANSFERS) : [],
-        canvas: graph.canvas,
-      };
+      state = normalizeStore(JSON.parse(raw));
     } catch (error) {
       if (error && error.code !== 'ENOENT') {
         console.error('[conversation-flow] unreadable graph state, starting empty:', error && error.message);
       }
     }
+  }
+
+  /* --------------------------------------------------------------- topics */
+
+  function allTopics() {
+    return state.topics || [];
+  }
+
+  function topicById(topicId) {
+    return allTopics().find((topic) => topic.id === topicId) || null;
+  }
+
+  function activeTopic() {
+    const found = topicById(state.activeTopicId);
+    if (found) return found;
+    const first = allTopics()[0];
+    if (first) state.activeTopicId = first.id;
+    return first || null;
+  }
+
+  function touchTopic(topic) {
+    if (topic) topic.updatedAt = Date.now();
+  }
+
+  /** 每个主题的节点 id 只在本主题内唯一，所以跨主题查找要带上主题。 */
+  function findNodeEverywhere(nodeId) {
+    for (const topic of allTopics()) {
+      const node = (topic.nodes || []).find((item) => item.id === nodeId);
+      if (node) return { topic, node };
+    }
+    return null;
+  }
+
+  function findNodeBySessionEverywhere(sessionId) {
+    for (const topic of allTopics()) {
+      const node = (topic.nodes || []).find((item) => item.sessionId === sessionId);
+      if (node) return { topic, node };
+    }
+    return null;
   }
 
   /* ---------------------------------------------------- session catalogue */
@@ -362,9 +448,12 @@ export function apply(ctx, config = {}) {
     }
     sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 
-    // Canvas nodes need real content even when a projection hint is stale or absent.
+    // Canvas nodes (any topic) need real content even when a projection hint is stale or absent.
     const canvasIds = new Set(
-      (state.nodes || []).map((node) => node.sessionId).filter((id) => typeof id === 'string'),
+      allTopics()
+        .flatMap((topic) => topic.nodes || [])
+        .map((node) => node.sessionId)
+        .filter((id) => typeof id === 'string'),
     );
     let budget = 8;
     for (const session of sessions) {
@@ -497,7 +586,7 @@ export function apply(ctx, config = {}) {
     if (!sourceSessionId || !targetSessionId) {
       return { ok: false, code: 'invalid-edge', error: 'edge endpoints are missing' };
     }
-    const sourceNode = options.node || findNodeBySession(sourceSessionId);
+    const sourceNode = options.node || (findNodeBySessionEverywhere(sourceSessionId) || {}).node || null;
     const cause = options.cause || (options.auto === true ? 'auto' : 'manual');
     const targetAgent = agentService.get(targetSessionId);
     const targetTitle = (await sessionTitle(targetSessionId)) || targetSessionId;
@@ -585,23 +674,20 @@ export function apply(ctx, config = {}) {
     return { ok: true, targetTitle: preview(targetTitle, 60), sourceTitle: preview(sourceTitle, 60), chars: text.length, kind: edge.kind, kindLabel: payload.meta };
   }
 
-  /* ----------------------------------------------------- auto coordinate */
+  /* ------------------------------------ topics: nodes, edges and running */
 
-  function autoEdgesFor(sourceSessionId) {
-    const nodeIds = new Set(
-      (state.nodes || []).filter((node) => node.sessionId === sourceSessionId).map((node) => node.id),
-    );
-    if (nodeIds.size === 0) return [];
-    return (state.edges || []).filter((edge) => edge.auto === true && nodeIds.has(edge.source));
-  }
-
-  function nodeSessionId(nodeId) {
-    const node = (state.nodes || []).find((item) => item.id === nodeId);
+  function nodeSessionIdIn(topic, nodeId) {
+    const node = (topic.nodes || []).find((item) => item.id === nodeId);
     return node ? node.sessionId : null;
   }
 
-  function findNodeBySession(sessionId) {
-    return (state.nodes || []).find((node) => node.sessionId === sessionId) || null;
+  /** All edges of a topic whose source node hosts `sessionId` and that are marked auto. */
+  function autoEdgesFor(topic, sourceSessionId) {
+    const nodeIds = new Set(
+      (topic.nodes || []).filter((node) => node.sessionId === sourceSessionId).map((node) => node.id),
+    );
+    if (nodeIds.size === 0) return [];
+    return (topic.edges || []).filter((edge) => edge.auto === true && nodeIds.has(edge.source));
   }
 
   /** How long a node may stay "driven but unfinished" before another run is allowed. */
@@ -628,13 +714,13 @@ export function apply(ctx, config = {}) {
     return !!node.pendingAt && now - node.pendingAt < PENDING_TTL_MS;
   }
 
-  /** Push every outgoing channel of one node (fixed output or the conversation content). */
-  async function pushNode(node, now) {
-    const edges = (state.edges || []).filter((edge) => edge.source === node.id);
+  /** Push every outgoing channel of one node inside its own topic. */
+  async function pushNode(topic, node, now) {
+    const edges = (topic.edges || []).filter((edge) => edge.source === node.id);
     let sent = 0;
     let failed = 0;
     for (const edge of edges) {
-      const targetSessionId = nodeSessionId(edge.target);
+      const targetSessionId = nodeSessionIdIn(topic, edge.target);
       if (!targetSessionId) continue;
       // eslint-disable-next-line no-await-in-loop
       const result = await transfer(
@@ -648,6 +734,7 @@ export function apply(ctx, config = {}) {
       }
     }
     if (node.lastRunAt !== now) node.lastRunAt = now;
+    touchTopic(topic);
     schedulePersist();
     return { sent, failed };
   }
@@ -659,7 +746,7 @@ export function apply(ctx, config = {}) {
    *  - `output`, when set, is the pushed payload and can be delivered right away;
    *  - `schedule` decides when this happens automatically.
    */
-  async function executeNode(node, options = {}) {
+  async function executeNode(topic, node, options = {}) {
     const now = options.now || Date.now();
     const role = (node.role || '').trim();
     const hasOutput = !!(node.output && node.output.trim());
@@ -667,12 +754,12 @@ export function apply(ctx, config = {}) {
 
     if (!role || !agentService || typeof agentService.get !== 'function') {
       // No role: a pure data push (this is what the previous behaviour did).
-      if (!(state.edges || []).some((edge) => edge.source === node.id)) {
+      if (!(topic.edges || []).some((edge) => edge.source === node.id)) {
         node.lastRunAt = now;
         schedulePersist();
         return { sent: 0, failed: 0, kicked: false };
       }
-      const pushed = await pushNode(node, now);
+      const pushed = await pushNode(topic, node, now);
       return { ...pushed, kicked: false };
     }
 
@@ -707,11 +794,12 @@ export function apply(ctx, config = {}) {
     if (hasOutput) {
       // Deterministic payload — no need to wait for the turn.
       node.pendingAt = 0;
-      const pushed = await pushNode(node, now);
+      const pushed = await pushNode(topic, node, now);
       return { ...pushed, kicked: true, pending: false };
     }
 
     node.pendingAt = now;
+    touchTopic(topic);
     schedulePersist();
     return { sent: 0, failed: 0, kicked: true, pending: true };
   }
@@ -719,44 +807,50 @@ export function apply(ctx, config = {}) {
   /** The driven turn finished: deliver its fresh result downstream (exactly once). */
   async function fulfilPending(sessionId) {
     const now = Date.now();
-    const nodes = (state.nodes || []).filter(
-      (node) => node.sessionId === sessionId && node.pendingAt && now - node.pendingAt < PENDING_TTL_MS,
-    );
-    for (const node of nodes) {
-      node.pendingAt = 0;
-      // eslint-disable-next-line no-await-in-loop
-      await pushNode(node, now);
+    for (const topic of allTopics()) {
+      const nodes = (topic.nodes || []).filter(
+        (node) => node.sessionId === sessionId && node.pendingAt && now - node.pendingAt < PENDING_TTL_MS,
+      );
+      for (const node of nodes) {
+        node.pendingAt = 0;
+        // eslint-disable-next-line no-await-in-loop
+        await pushNode(topic, node, now);
+      }
     }
   }
 
-  /** One scheduler pass: every timed node whose window elapsed is executed. */
+  /** One scheduler pass: every timed node of every topic whose window elapsed. */
   async function runScheduled(now = Date.now()) {
-    for (const node of state.nodes || []) {
-      const schedule = node.schedule;
-      if (!schedule || schedule.enabled !== true) continue;
-      const intervalMs = Math.max(MIN_SCHEDULE_MINUTES, schedule.everyMinutes || 10) * 60_000;
-      if (now - (node.lastRunAt || 0) < intervalMs) continue;
-      if (nodeIsPending(node, now)) continue;
-      if (!(state.edges || []).some((edge) => edge.source === node.id)) continue;
-      // eslint-disable-next-line no-await-in-loop
-      const outcome = await executeNode(node, { now, scheduled: true });
-      if (outcome && outcome.error) console.warn('[conversation-flow] scheduled node skipped:', outcome.error);
+    for (const topic of allTopics()) {
+      for (const node of topic.nodes || []) {
+        const schedule = node.schedule;
+        if (!schedule || schedule.enabled !== true) continue;
+        const intervalMs = Math.max(MIN_SCHEDULE_MINUTES, schedule.everyMinutes || 10) * 60_000;
+        if (now - (node.lastRunAt || 0) < intervalMs) continue;
+        if (nodeIsPending(node, now)) continue;
+        if (!(topic.edges || []).some((edge) => edge.source === node.id)) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const outcome = await executeNode(topic, node, { now, scheduled: true });
+        if (outcome && outcome.error) console.warn('[conversation-flow] scheduled node skipped:', outcome.error);
+      }
     }
   }
 
+  /** Auto-coordination: every topic that has this session marked auto pushes downstream. */
   async function coordinateFrom(sourceSessionId, auto) {
-    const edges = autoEdgesFor(sourceSessionId);
-    if (edges.length === 0) return;
     const now = Date.now();
-    for (const edge of edges) {
-      const targetSessionId = nodeSessionId(edge.target);
-      if (!targetSessionId) continue;
-      const guardKey = sourceSessionId + '->' + targetSessionId;
-      const last = recentDeliveries.get(guardKey) || 0;
-      if (now - last < LOOP_GUARD_MS) continue;
-      // eslint-disable-next-line no-await-in-loop
-      const result = await transfer({ ...edge, sourceSessionId, targetSessionId }, { auto: auto === true, cause: 'auto' });
-      if (!result.ok) console.warn('[conversation-flow] auto transfer skipped:', result.error);
+    for (const topic of allTopics()) {
+      const edges = autoEdgesFor(topic, sourceSessionId);
+      for (const edge of edges) {
+        const targetSessionId = nodeSessionIdIn(topic, edge.target);
+        if (!targetSessionId) continue;
+        const guardKey = sourceSessionId + '->' + targetSessionId;
+        const last = recentDeliveries.get(guardKey) || 0;
+        if (now - last < LOOP_GUARD_MS) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const result = await transfer({ ...edge, sourceSessionId, targetSessionId }, { auto: auto === true, cause: 'auto' });
+        if (!result.ok) console.warn('[conversation-flow] auto transfer skipped:', result.error);
+      }
     }
   }
 
@@ -817,11 +911,28 @@ export function apply(ctx, config = {}) {
 
             if (method === 'GET' && (route === '/api/state' || route === '/api/state/')) {
               const sessions = await listSessions();
+              const topic = activeTopic();
               json(200, {
                 ok: true,
                 value: {
                   rev: state.rev,
-                  graph: { nodes: state.nodes, edges: state.edges, canvas: state.canvas },
+                  activeTopicId: state.activeTopicId,
+                  topics: allTopics().map((item) => ({
+                    id: item.id,
+                    name: item.name,
+                    nodeCount: (item.nodes || []).length,
+                    edgeCount: (item.edges || []).length,
+                    scheduleCount: (item.nodes || []).filter((node) => node.schedule && node.schedule.enabled).length,
+                    updatedAt: item.updatedAt,
+                    updatedText: relativeTime(item.updatedAt),
+                  })),
+                  graph: {
+                    nodes: (topic && topic.nodes) || [],
+                    edges: (topic && topic.edges) || [],
+                    canvas: (topic && topic.canvas) || defaultCanvas(),
+                    topicId: topic ? topic.id : null,
+                    topicName: topic ? topic.name : null,
+                  },
                   transfers: state.transfers,
                   sessions,
                   panelId: 'conversation-flow',
@@ -836,24 +947,109 @@ export function apply(ctx, config = {}) {
               return;
             }
 
+            if (method === 'POST' && (route === '/api/topic' || route === '/api/topic/')) {
+              const body = await readJsonBody(req);
+              const action = typeof body.action === 'string' ? body.action : 'list';
+              let topic = null;
+              if (action === 'create') {
+                topic = newTopic(body.name);
+                allTopics().push(topic);
+                state.activeTopicId = topic.id;
+                await persist();
+              } else if (action === 'select') {
+                const target = topicById(body.topicId || body.id);
+                if (!target) {
+                  json(404, { ok: false, error: '主题不存在：' + String(body.topicId || body.id || '') });
+                  return;
+                }
+                state.activeTopicId = target.id;
+                await persist();
+                topic = target;
+              } else if (action === 'rename') {
+                const target = topicById(body.topicId || body.id);
+                if (!target) {
+                  json(404, { ok: false, error: '主题不存在：' + String(body.topicId || body.id || '') });
+                  return;
+                }
+                const name = cleanTopicName(body.name);
+                if (name) target.name = name;
+                touchTopic(target);
+                await persist();
+                topic = target;
+              } else if (action === 'delete') {
+                const target = topicById(body.topicId || body.id);
+                if (!target) {
+                  json(404, { ok: false, error: '主题不存在：' + String(body.topicId || body.id || '') });
+                  return;
+                }
+                if (allTopics().length <= 1) {
+                  json(409, { ok: false, error: '至少要保留一个主题。' });
+                  return;
+                }
+                state.topics = allTopics().filter((item) => item.id !== target.id);
+                if (state.activeTopicId === target.id) {
+                  state.activeTopicId = allTopics()[0] ? allTopics()[0].id : null;
+                }
+                await persist();
+              }
+              const active = activeTopic();
+              json(200, {
+                ok: true,
+                value: {
+                  activeTopicId: state.activeTopicId,
+                  topics: allTopics().map((item) => ({
+                    id: item.id,
+                    name: item.name,
+                    nodeCount: (item.nodes || []).length,
+                    edgeCount: (item.edges || []).length,
+                    updatedAt: item.updatedAt,
+                  })),
+                  topic: topic
+                    ? { id: topic.id, name: topic.name, nodeCount: (topic.nodes || []).length, edgeCount: (topic.edges || []).length }
+                    : active
+                      ? { id: active.id, name: active.name, nodeCount: (active.nodes || []).length, edgeCount: (active.edges || []).length }
+                      : null,
+                },
+              });
+              return;
+            }
+
             if (method === 'POST' && (route === '/api/graph' || route === '/api/graph/')) {
               const body = await readJsonBody(req);
+              const topic = (body && body.topicId ? topicById(body.topicId) : activeTopic()) || activeTopic();
+              if (!topic) {
+                json(409, { ok: false, error: '没有可用的主题。' });
+                return;
+              }
               const graph = normalizeGraph(body);
-              state.nodes = graph.nodes;
-              state.edges = graph.edges;
-              if (body && body.canvas !== undefined) state.canvas = graph.canvas;
+              topic.nodes = graph.nodes;
+              topic.edges = graph.edges;
+              if (body && body.canvas !== undefined) topic.canvas = graph.canvas;
+              touchTopic(topic);
               await persist();
-              json(200, { ok: true, value: { rev: state.rev, nodes: state.nodes.length, edges: state.edges.length, canvas: state.canvas } });
+              json(200, {
+                ok: true,
+                value: {
+                  rev: state.rev,
+                  topicId: topic.id,
+                  nodes: topic.nodes.length,
+                  edges: topic.edges.length,
+                  canvas: topic.canvas,
+                },
+              });
               return;
             }
 
             if (method === 'POST' && (route === '/api/node' || route === '/api/node/')) {
               const body = await readJsonBody(req);
-              const node = (state.nodes || []).find(
-                (item) =>
-                  (typeof body.nodeId === 'string' && item.id === body.nodeId) ||
-                  (typeof body.sessionId === 'string' && item.sessionId === body.sessionId),
-              );
+              const scope = body.topicId ? topicById(body.topicId) : activeTopic();
+              const node = scope
+                ? (scope.nodes || []).find(
+                    (item) =>
+                      (typeof body.nodeId === 'string' && item.id === body.nodeId) ||
+                      (typeof body.sessionId === 'string' && item.sessionId === body.sessionId),
+                  )
+                : null;
               if (!node) {
                 json(404, { ok: false, error: '节点不在画布上：' + String(body.nodeId || body.sessionId || '') });
                 return;
@@ -863,6 +1059,7 @@ export function apply(ctx, config = {}) {
               if (body.schedule && typeof body.schedule === 'object') {
                 node.schedule = normalizeSchedule({ ...node.schedule, ...body.schedule });
               }
+              touchTopic(scope);
               await persist();
               json(200, { ok: true, value: node });
               return;
@@ -870,16 +1067,19 @@ export function apply(ctx, config = {}) {
 
             if (method === 'POST' && (route === '/api/run' || route === '/api/run/')) {
               const body = await readJsonBody(req);
-              const node = (state.nodes || []).find(
-                (item) =>
-                  (typeof body.nodeId === 'string' && item.id === body.nodeId) ||
-                  (typeof body.sessionId === 'string' && item.sessionId === body.sessionId),
-              );
+              const scope = body.topicId ? topicById(body.topicId) : activeTopic();
+              const node = scope
+                ? (scope.nodes || []).find(
+                    (item) =>
+                      (typeof body.nodeId === 'string' && item.id === body.nodeId) ||
+                      (typeof body.sessionId === 'string' && item.sessionId === body.sessionId),
+                  )
+                : null;
               if (!node) {
                 json(404, { ok: false, error: '节点不在画布上：' + String(body.nodeId || body.sessionId || '') });
                 return;
               }
-              const outcome = await executeNode(node);
+              const outcome = await executeNode(scope, node);
               json(200, {
                 ok: true,
                 value: { nodeId: node.id, lastRunAt: node.lastRunAt, pendingAt: node.pendingAt || 0, ...outcome },
@@ -893,8 +1093,14 @@ export function apply(ctx, config = {}) {
                 kind: ['summary', 'recent', 'transcript', 'custom'].includes(body.kind) ? body.kind : 'summary',
                 text: typeof body.text === 'string' ? body.text : '',
                 recentCount: Number.isFinite(body.recentCount) ? body.recentCount : 3,
-                sourceSessionId: nodeSessionId(body.source) || (typeof body.source === 'string' ? body.source : null),
-                targetSessionId: nodeSessionId(body.target) || (typeof body.target === 'string' ? body.target : null),
+                sourceSessionId:
+                  nodeSessionIdIn(activeTopic(), body.source) ||
+                  (findNodeEverywhere(body.source) || {}).node?.sessionId ||
+                  (typeof body.source === 'string' ? body.source : null),
+                targetSessionId:
+                  nodeSessionIdIn(activeTopic(), body.target) ||
+                  (findNodeEverywhere(body.target) || {}).node?.sessionId ||
+                  (typeof body.target === 'string' ? body.target : null),
               };
               const result = await transfer(edge, { auto: false });
               json(result.ok ? 200 : 409, result.ok ? { ok: true, value: result } : { ok: false, error: result.error, code: result.code });
@@ -903,12 +1109,22 @@ export function apply(ctx, config = {}) {
 
             if (method === 'POST' && (route === '/api/coordinate' || route === '/api/coordinate/')) {
               const body = await readJsonBody(req);
-              const edge = (state.edges || []).find((item) => item.id === body.edgeId);
+              let edge = null;
+              let scope = null;
+              for (const topic of allTopics()) {
+                const found = (topic.edges || []).find((item) => item.id === body.edgeId);
+                if (found) {
+                  edge = found;
+                  scope = topic;
+                  break;
+                }
+              }
               if (!edge) {
                 json(404, { ok: false, error: 'edge not found' });
                 return;
               }
               edge.auto = body.enabled !== false;
+              touchTopic(scope);
               await persist();
               json(200, { ok: true, value: { edgeId: edge.id, auto: edge.auto } });
               return;
@@ -938,14 +1154,14 @@ export function apply(ctx, config = {}) {
         tools.register({
           name: 'conversation_flow',
           description:
-            '管理「对话流」画布：列出所有对话及其状态，查看画布上的节点与数据通道，编辑节点的作用/输出内容/定时，在对话之间搬运内容（摘要/最近几轮/完整记录/自定义文本），以及开启或关闭自动协调（源对话每轮结束时自动把内容推送到目标对话）。数据只会投递给当前已打开（有活动 Agent）的对话。',
+            '管理「对话流」画布：支持多个主题（每个主题一张独立工作表），列出所有对话及其状态、查看/切换主题、查看画布上的节点与数据通道、编辑节点的作用/输出内容/定时、在对话之间搬运内容（摘要/最近几轮/完整记录/自定义文本），以及开启或关闭自动协调（源对话每轮结束时自动把内容推送到目标对话）。数据只会投递给当前已打开（有活动 Agent）的对话。',
           parameters: {
             type: 'object',
             properties: {
               action: {
                 type: 'string',
-                enum: ['list', 'state', 'node', 'run', 'transfer', 'coordinate', 'link'],
-                description: 'list：列出对话；state：查看画布；node：编辑节点的作用/输出/定时；run：立即按定时逻辑推送该节点的下游；transfer：把内容从源对话推到目标对话；coordinate：开关某条连线的自动协调；link：在画布上建立一条数据通道。',
+                enum: ['list', 'topics', 'topic', 'state', 'node', 'run', 'transfer', 'coordinate', 'link'],
+                description: 'list：列出对话；topics：列出主题；topic：切换/新建/改名/删除主题；state：查看当前主题画布；node：编辑节点的作用/输出/定时；run：立即执行该节点；transfer：把内容从源对话推到目标对话；coordinate：开关某条连线的自动协调；link：在画布上建立一条数据通道。',
               },
               source: { type: 'string', description: '源对话的 session id，或它在画布上的节点 id。transfer/link 必填。' },
               target: { type: 'string', description: '目标对话的 session id，或它在画布上的节点 id。transfer/link 必填。' },
@@ -959,6 +1175,9 @@ export function apply(ctx, config = {}) {
               output: { type: 'string', description: 'node：输出内容；填写后该节点总是推送这段文本，留空则按连线类型从对话取内容。' },
               schedule: { type: 'boolean', description: 'node：是否定时。' },
               every_minutes: { type: 'number', description: 'node：定时间隔（分钟，1–720）。' },
+              topic_id: { type: 'string', description: '主题 id（topic 操作的目标；link/node/run 可指定在哪个主题里操作）。' },
+              topic_op: { type: 'string', enum: ['create', 'select', 'rename', 'delete'], description: 'topic：create 新建（配 name）、select 切换、rename 改名（配 name）、delete 删除。' },
+              name: { type: 'string', description: 'topic：主题名称。' },
             },
             required: ['action'],
             additionalProperties: false,
@@ -991,9 +1210,63 @@ export function apply(ctx, config = {}) {
                 )
                 .join('\n');
             }
+            if (action === 'topics') {
+              const active = activeTopic();
+              return allTopics()
+                .map(
+                  (topic) =>
+                    (topic.id === (active && active.id) ? '▶ ' : '· ') +
+                    topic.name +
+                    '（' + (topic.nodes || []).length + ' 节点 / ' + (topic.edges || []).length + ' 通道）' +
+                    ' · id=' + topic.id,
+                )
+                .join('\n');
+            }
+            if (action === 'topic') {
+              const op = args.topic_op || 'select';
+              let topic = null;
+              if (op === 'create') {
+                topic = newTopic(args.name);
+                allTopics().push(topic);
+                state.activeTopicId = topic.id;
+                await persist();
+                return '已创建主题「' + topic.name + '」（id=' + topic.id + '），并切换过去。';
+              }
+              if (op === 'select' || op === 'rename' || op === 'delete') {
+                topic = topicById(args.topic_id) || null;
+                if (!topic && op === 'select') {
+                  topic = allTopics().find((item) => item.name === args.name) || null;
+                }
+                if (!topic) return '主题不存在：' + String(args.topic_id || args.name || '') + '。';
+                if (op === 'select') {
+                  state.activeTopicId = topic.id;
+                  await persist();
+                  return '已切换到主题「' + topic.name + '」。';
+                }
+                if (op === 'rename') {
+                  const name = cleanTopicName(args.name);
+                  if (!name) return 'rename 需要 name。';
+                  topic.name = name;
+                  touchTopic(topic);
+                  await persist();
+                  return '主题已改名为「' + topic.name + '」。';
+                }
+                if (allTopics().length <= 1) return '至少要保留一个主题。';
+                state.topics = allTopics().filter((item) => item.id !== topic.id);
+                if (state.activeTopicId === topic.id) {
+                  state.activeTopicId = allTopics()[0] ? allTopics()[0].id : null;
+                }
+                await persist();
+                return '已删除主题「' + topic.name + '」。';
+              }
+              return 'topic 的 topic_op 支持 create / select / rename / delete。';
+            }
             if (action === 'state') {
-              if (state.nodes.length === 0) return '画布为空。';
-              const lines = state.nodes.map((node) => {
+              const topic = activeTopic();
+              if (!topic) return '画布为空。';
+              const header = '当前主题：' + topic.name + '（' + (topic.nodes || []).length + ' 节点 / ' + (topic.edges || []).length + ' 通道）';
+              if ((topic.nodes || []).length === 0) return header + '\n画布为空。';
+              const lines = (topic.nodes || []).map((node) => {
                 const bits = ['· 节点 ' + node.id + ' → 对话 ' + node.sessionId];
                 if (node.role) bits.push('作用：' + node.role);
                 if (node.output) bits.push('输出：固定文本 ' + node.output.length + ' 字');
@@ -1006,18 +1279,20 @@ export function apply(ctx, config = {}) {
                 if (node.pendingAt && Date.now() - node.pendingAt < PENDING_TTL_MS) bits.push('执行中（等待该轮产出）');
                 return bits.join(' · ');
               });
-              const edges = state.edges.map(
+              const edges = (topic.edges || []).map(
                 (edge) =>
                   '· 通道 ' + edge.id + '：' + edge.source + ' → ' + edge.target + '（' + edge.kind + (edge.auto ? '，自动协调' : '，手动') + '）',
               );
               const recent = state.transfers.slice(0, 5).map((item) => '· ' + item.at + ' ' + (item.ok ? '成功' : '失败') + '：' + item.fromTitle + ' → ' + item.toTitle + '（' + item.chars + ' 字）');
-              return [lines.join('\n'), edges.join('\n'), recent.join('\n')].filter(Boolean).join('\n\n');
+              return [header, lines.join('\n'), edges.join('\n'), recent.join('\n')].filter(Boolean).join('\n\n');
             }
             if (action === 'node') {
               const key = args.node_id || args.source;
-              const node =
-                (state.nodes || []).find((item) => item.id === key) ||
-                (state.nodes || []).find((item) => item.sessionId === key);
+              const found = findNodeBySessionEverywhere(key) || findNodeEverywhere(key);
+              const topic = found ? found.topic : args.topic_id ? topicById(args.topic_id) : activeTopic();
+              const node = found
+                ? found.node
+                : (topic && (topic.nodes || []).find((item) => item.id === key || item.sessionId === key)) || null;
               if (!node) return '未找到节点 ' + String(key) + '。';
               if (typeof args.role === 'string') node.role = args.role.slice(0, MAX_ROLE_CHARS);
               if (typeof args.output === 'string') node.output = args.output.slice(0, MAX_PAYLOAD_CHARS);
@@ -1028,23 +1303,20 @@ export function apply(ctx, config = {}) {
                   ...(Number.isFinite(args.every_minutes) ? { everyMinutes: args.every_minutes } : {}),
                 });
               }
+              touchTopic(topic);
               await persist();
-              const parts = ['节点 ' + node.id + '（对话 ' + node.sessionId + '）已更新'];
+              const parts = ['节点 ' + node.id + '（主题「' + (topic ? topic.name : '?') + '」· 对话 ' + node.sessionId + '）已更新'];
               parts.push('作用：' + (node.role || '（空）'));
               parts.push('输出：' + (node.output ? '固定 ' + node.output.length + ' 字' : '按连线类型取对话内容'));
-              parts.push(
-                '定时：' +
-                  (node.schedule.enabled ? '每 ' + node.schedule.everyMinutes + ' 分钟' : '关'),
-              );
+              parts.push('定时：' + (node.schedule.enabled ? '每 ' + node.schedule.everyMinutes + ' 分钟' : '关'));
               return parts.join('；') + '。';
             }
             if (action === 'run') {
               const key = args.node_id || args.source;
-              const node =
-                (state.nodes || []).find((item) => item.id === key) ||
-                (state.nodes || []).find((item) => item.sessionId === key);
-              if (!node) return '未找到节点 ' + String(key) + '。';
-              const outcome = await executeNode(node);
+              const found = findNodeBySessionEverywhere(key) || findNodeEverywhere(key);
+              if (!found) return '未找到节点 ' + String(key) + '。';
+              const outcome = await executeNode(found.topic, found.node);
+              const node = found.node;
               if (outcome.error) return '执行失败：' + outcome.error;
               if (outcome.kicked && outcome.pending) {
                 return (
@@ -1059,8 +1331,15 @@ export function apply(ctx, config = {}) {
               return '节点 ' + node.id + ' 已推送：成功 ' + outcome.sent + ' 条' + (outcome.failed ? '，失败 ' + outcome.failed + ' 条' : '') + '。';
             }
             if (action === 'transfer') {
-              const sourceSessionId = nodeSessionId(args.source) || args.source;
-              const targetSessionId = nodeSessionId(args.target) || args.target;
+              const active = activeTopic();
+              const sourceSessionId =
+                nodeSessionIdIn(active, args.source) ||
+                (findNodeEverywhere(args.source) || {}).node?.sessionId ||
+                args.source;
+              const targetSessionId =
+                nodeSessionIdIn(active, args.target) ||
+                (findNodeEverywhere(args.target) || {}).node?.sessionId ||
+                args.target;
               if (!sourceSessionId || !targetSessionId) return 'transfer 需要 source 与 target。';
               const result = await transfer(
                 {
@@ -1076,22 +1355,37 @@ export function apply(ctx, config = {}) {
               return '已把 ' + result.chars + ' 字从「' + result.sourceTitle + '」推送至「' + result.targetTitle + '」。';
             }
             if (action === 'link') {
-              const sourceSessionId = nodeSessionId(args.source) || args.source;
-              const targetSessionId = nodeSessionId(args.target) || args.target;
+              const topic = args.topic_id ? topicById(args.topic_id) : activeTopic();
+              if (!topic) return '没有可用的主题。';
+              const sourceSessionId =
+                nodeSessionIdIn(topic, args.source) || (findNodeEverywhere(args.source) || {}).node?.sessionId || args.source;
+              const targetSessionId =
+                nodeSessionIdIn(topic, args.target) || (findNodeEverywhere(args.target) || {}).node?.sessionId || args.target;
               if (!sourceSessionId || !targetSessionId) return 'link 需要 source 与 target。';
               const ensureNode = (sessionId) => {
-                const existing = state.nodes.find((node) => node.sessionId === sessionId);
+                const existing = (topic.nodes || []).find((node) => node.sessionId === sessionId);
                 if (existing) return existing;
-                const node = { id: 'n' + randomUUID().slice(0, 8), sessionId, x: 40 + state.nodes.length * 40, y: 40 + state.nodes.length * 30 };
-                state.nodes.push(node);
+                const node = {
+                  id: 'n' + randomUUID().slice(0, 8),
+                  sessionId,
+                  x: 40 + (topic.nodes || []).length * 40,
+                  y: 40 + (topic.nodes || []).length * 30,
+                  role: '',
+                  output: '',
+                  schedule: normalizeSchedule(null),
+                  lastRunAt: 0,
+                  pendingAt: 0,
+                };
+                (topic.nodes || []).push(node);
                 return node;
               };
               const sourceNode = ensureNode(sourceSessionId);
               const targetNode = ensureNode(targetSessionId);
               if (sourceNode.id === targetNode.id) return '不能把对话连接到它自己。';
-              const existing = state.edges.find((edge) => edge.source === sourceNode.id && edge.target === targetNode.id);
+              const existing = (topic.edges || []).find((edge) => edge.source === sourceNode.id && edge.target === targetNode.id);
               if (existing) {
                 existing.auto = args.auto === true;
+                touchTopic(topic);
                 await persist();
                 return '已更新通道 ' + existing.id + '（自动协调：' + (existing.auto ? '开' : '关') + '）。';
               }
@@ -1104,14 +1398,25 @@ export function apply(ctx, config = {}) {
                 text: args.text || '',
                 recentCount: Number.isFinite(args.recent_count) ? args.recent_count : 3,
               };
-              state.edges.push(edge);
+              (topic.edges || []).push(edge);
+              touchTopic(topic);
               await persist();
-              return '已建立通道 ' + edge.id + '：' + sourceSessionId + ' → ' + targetSessionId + '。';
+              return '已在主题「' + topic.name + '」建立通道 ' + edge.id + '：' + sourceSessionId + ' → ' + targetSessionId + '。';
             }
             if (action === 'coordinate') {
-              const edge = state.edges.find((item) => item.id === args.edge_id);
+              let edge = null;
+              let scope = null;
+              for (const topic of allTopics()) {
+                const found = (topic.edges || []).find((item) => item.id === args.edge_id);
+                if (found) {
+                  edge = found;
+                  scope = topic;
+                  break;
+                }
+              }
               if (!edge) return '未找到连线 ' + args.edge_id + '。';
               edge.auto = args.auto !== false;
+              touchTopic(scope);
               await persist();
               return '连线 ' + edge.id + ' 的自动协调已' + (edge.auto ? '开启' : '关闭') + '。';
             }
