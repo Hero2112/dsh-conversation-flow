@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Conversation Flow",
+    "description": "A React Flow canvas for conversations: place several conversations on one graph, move data between them, and let a source conversation push its content into a target conversation automatically after each turn."
+  }
+}

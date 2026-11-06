@@ -21,8 +21,17 @@ import os from 'node:os';
 
 export const name = 'conversation-flow';
 
-/** Everything is looked up optionally, so the plugin stays inert in profiles without these services. */
-export const inject = [];
+/**
+ * 这两个服务必须在 apply 之前就绪：路由要用 webServer，Agent 工具要用 tools。
+ *
+ * 早先这里是空数组（"全部可选、缺服务就静默降级"）。DSH 0.2.0 的 Loader 在启动时会并发
+ * 装载各插件行，本插件可能先于 tools / webServer 挂载而 apply，于是两个 `ctx.get()`
+ * 都拿到 undefined，路由和工具一个都没注册——表现就是「面板能打开、左侧对话列表空白」。
+ * 用它俩作为 inject 依赖后，Cordis 会等这两个服务就位再调用 apply。
+ */
+export const inject = ['tools', 'webServer'];
+
+/** 其余服务（sessionQuery / agents / sessionController ...）仍按需可选获取。 */
 
 const API_PREFIX = '/conversation-flow/api';
 const GRAPH_ROUTE = '/conversation-flow';
@@ -886,13 +895,7 @@ export function apply(ctx, config = {}) {
   if (typeof schedulerTimer.unref === 'function') schedulerTimer.unref();
   disposers.push(() => clearInterval(schedulerTimer));
 
-  const server = webServer();
-  if (server && typeof server.register === 'function') {
-    disposers.push(
-      server.register({
-        kind: 'prefix',
-        path: GRAPH_ROUTE,
-        handler: async (req, res) => {
+  const routeHandler = async (req, res) => {
           const json = (status, value) => {
             res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
             res.end(JSON.stringify(value));
@@ -1138,21 +1141,30 @@ export function apply(ctx, config = {}) {
               /* response already finished */
             }
           }
-        },
-      }),
-    );
+  };
+
+  function registerRoutes(server) {
+    return server.register({ kind: 'prefix', path: GRAPH_ROUTE, handler: routeHandler });
+  }
+
+  const server = webServer();
+  if (server && typeof server.register === 'function') {
+    disposers.push(registerRoutes(server));
   } else {
-    console.warn('[conversation-flow] webServer service unavailable: the console panel will report Host offline');
+    // webServer 在这个 profile 里还没挂载：等它出现后再注册（inject 正常已保证顺序，这是双保险）。
+    console.warn('[conversation-flow] webServer unavailable on load; waiting for it');
+    ctx.inject(['webServer'], (scoped) => {
+      const late = scoped.get('webServer');
+      if (late && typeof late.register === 'function') {
+        scoped.effect(() => registerRoutes(late), 'conversation-flow: routes');
+      }
+    });
   }
 
   // Agent-facing twin of the panel operations.
-  const tools = ctx.get('tools');
-  if (tools && typeof tools.register === 'function') {
-    toolRegistration.status = 'attempting';
-    try {
-      disposers.push(
-        tools.register({
-          name: 'conversation_flow',
+  function buildToolDefinition() {
+    return {
+      name: 'conversation_flow',
           description:
             '管理「对话流」画布：支持多个主题（每个主题一张独立工作表），列出所有对话及其状态、查看/切换主题、查看画布上的节点与数据通道、编辑节点的作用/输出内容/定时、在对话之间搬运内容（摘要/最近几轮/完整记录/自定义文本），以及开启或关闭自动协调（源对话每轮结束时自动把内容推送到目标对话）。数据只会投递给当前已打开（有活动 Agent）的对话。',
           parameters: {
@@ -1422,16 +1434,36 @@ export function apply(ctx, config = {}) {
             }
             return '未知 action：' + String(action);
           },
-        }),
-      );
+    };
+  }
+
+  function registerTool(tools) {
+    toolRegistration.status = 'attempting';
+    try {
+      const dispose = tools.register(buildToolDefinition());
       toolRegistration.status = 'registered';
+      return dispose;
     } catch (error) {
       toolRegistration.status = 'failed';
       toolRegistration.error = error && error.message ? error.message : String(error);
       console.error('[conversation-flow] tool registration failed:', toolRegistration.error);
+      return null;
     }
+  }
+
+  const tools = ctx.get('tools');
+  if (tools && typeof tools.register === 'function') {
+    const dispose = registerTool(tools);
+    if (dispose) disposers.push(dispose);
   } else {
     toolRegistration.status = 'no-service';
+    console.warn('[conversation-flow] tools unavailable on load; waiting for it');
+    ctx.inject(['tools'], (scoped) => {
+      const late = scoped.get('tools');
+      if (late && typeof late.register === 'function') {
+        scoped.effect(() => registerTool(late) || (() => {}), 'conversation-flow: tool');
+      }
+    });
   }
 
   ctx.effect(() => () => {

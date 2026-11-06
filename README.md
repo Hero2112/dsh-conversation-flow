@@ -1,8 +1,8 @@
 # 对话流 · `@local/dsh-conversation-flow`
 
 > **GitHub 仓库**：https://github.com/Hero2112/dsh-conversation-flow
-> **当前版本**：1.4.0 · **最近发布**：2026-11-04
-> **安装目录**：`releases/v1.4.0/`（冻结快照，**正在运行的就是它**）· 开发改 `dev/`
+> **当前版本**：1.4.1 · **最近发布**：2026-11-06
+> **安装目录**：`releases/v1.4.1/`（冻结快照，**正在运行的就是它**）· 开发改 `dev/`
 
 DSH（DeepSeek Harness）Web GUI 插件：把多个对话放进 **React Flow** 画布，管理对话之间的**数据传输**与**协调调度**；支持**多主题**——每个主题是一张独立画布，也就是一条独立工作流。
 
@@ -34,13 +34,16 @@ DSH（DeepSeek Harness）Web GUI 插件：把多个对话放进 **React Flow** �
 ├── CHANGELOG.md             版本总表
 ├── versions/
 │   ├── v1.3.0.md            历史版本说明
-│   └── v1.4.0.md            当前版本：多主题画布
+│   ├── v1.4.0.md            多主题画布
+│   └── v1.4.1.md            当前版本：修复启动顺序导致的面板空数据
 ├── releases/
 │   ├── v1.3.0/              历史冻结快照
-│   └── v1.4.0/              当前冻结快照：完整可安装包（package.json client.js index.js cordis.patch.yml icon.svg locale/ README.md INSTALL.md）
+│   ├── v1.4.0/              历史冻结快照
+│   └── v1.4.1/              当前冻结快照：完整可安装包（package.json client.js index.js cordis.patch.yml icon.svg locale/ README.md INSTALL.md）
 ├── dist/
 │   ├── conversation-flow-1.3.0.zip
-│   └── conversation-flow-1.4.0.zip   分发包（顶层 conversation-flow/，永不覆盖）
+│   ├── conversation-flow-1.4.0.zip
+│   └── conversation-flow-1.4.1.zip   分发包（顶层 conversation-flow/，永不覆盖）
 ├── dev/                     下一版工作副本（构建产物 client.js 也输出到这里）
 └── build/                   esbuild 构建脚本 + 源码 + 测试 + API 参考文档
     ├── src/{client.jsx,page.jsx,shared.js}
@@ -54,16 +57,16 @@ DSH（DeepSeek Harness）Web GUI 插件：把多个对话放进 **React Flow** �
 ```text
 plugin_manager
   action: install_bundle
-  target: <本仓库>\releases\v1.4.0
+  target: <本仓库>\releases\v1.4.1
 ```
 
 - 已装旧版：先 `remove_bundle`（target `@local/dsh-conversation-flow`），再 `install_bundle` 新目录；
 - **安装路径变化后必须完全退出并重启 DSH**（只刷新页面不够），否则侧边栏图标与面板不出现；
 - 只改 `client.js`：刷新页面即可；只改 `index.js`：停用/启用插件即可。
 
-> **本机现状**：DSH 里跑的这份是通过 `dsh-plugins/conversation-flow` 安装的，而该目录是一个指向 `插件/conversation-flow/releases/v1.4.0` 的**目录联接（junction）**。这样做是为了让"源码搬进插件库、安装路径保持稳定"，从而**不必重启 DSH** 客户端就能继续显示侧边栏图标与面板；升级新版本时只需把 junction 目标换成新 release 再重装同一路径。
+> **本机现状**：DSH 里跑的这份是通过 `dsh-plugins/conversation-flow` 安装的，而该目录是一个指向 `插件/conversation-flow/releases/v1.4.1` 的**目录联接（junction）**。这样做是为了让"源码搬进插件库、安装路径保持稳定"，从而**不必重启 DSH** 客户端就能继续显示侧边栏图标与面板；升级新版本时只需把 junction 目标换成新 release 再重装同一路径。
 
-详见 [releases/v1.4.0/INSTALL.md](releases/v1.4.0/INSTALL.md)。
+详见 [releases/v1.4.1/INSTALL.md](releases/v1.4.1/INSTALL.md)。
 
 ## 开发
 

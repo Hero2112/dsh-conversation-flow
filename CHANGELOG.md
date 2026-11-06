@@ -3,6 +3,14 @@
 > 每次修改都单独提交，功能点用中文描述。版本号与插件包 `package.json` 保持一致。
 > 仓库：https://github.com/Hero2112/dsh-conversation-flow
 
+## 1.4.1 — 修复「面板能开、左侧对话列表空白」
+
+- **问题**：DSH 升级到 0.2.0 系列后，打开对话流面板能显示，但左侧对话列表与画布数据全空，Agent 工具也不见了。
+- **原因**：Host 半的 `apply()` 一次性获取 `webServer` 与 `tools` 两个服务，而 `inject` 为空数组。Loader 并发装载时本插件可能先于这两个服务挂载，`ctx.get()` 返回 `undefined`，路由与工具**一条都没注册**（客户端半独立加载，所以面板仍然打得开）。
+- **修复**：`export const inject = ['tools', 'webServer']`，让 Cordis 等依赖就位再 apply；同时把路由与工具注册改成 `ctx.inject([...])` 的延迟注册作为双保险；注册逻辑抽成 `registerRoutes()` / `buildToolDefinition()` / `registerTool()` 共用。
+- **验证**：Host 测试 36 项（新增 `inject` 声明回归保护）连跑 4 次全绿；真机 `/conversation-flow/api/state` 恢复 200（`sessions: 47`），`conversation_flow` 工具回归。
+- **影响**：只改 Host 半，`client.js` 未变；刷新页面即可，画布/主题数据不受影响。发布 `releases/v1.4.1/`、`versions/v1.4.1.md`、`dist/conversation-flow-1.4.1.zip`。
+
 ## 1.4.0 — 多主题画布（一个主题 = 一条工作流）
 
 - **多主题**：画布顶部新增主题条，可下拉切换、`＋新建主题`、`改名`、`删除`（二次确认；至少保留一个主题）。每个主题是一张独立画布，节点、通道、节点属性、画布外观互不干扰——等于在一个插件里管理多条工作流。

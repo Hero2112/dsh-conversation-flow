@@ -1,3 +1,8 @@
 - insert:
     - id: conversation-flow
       name: '@local/dsh-conversation-flow'
+      # 等这两个服务就位再 apply：路由要 webServer、Agent 工具要 tools。
+      # 空依赖会让本行在 Loader 并发启动时先于服务挂载而被 apply，导致路由/工具都没注册
+      # （表现为面板能打开、左侧对话列表空白）。模块里也导出了同样的 inject，这里再声明一次，
+      # 保证 Loader 行本身也会等待依赖。
+      inject: ['tools', 'webServer']

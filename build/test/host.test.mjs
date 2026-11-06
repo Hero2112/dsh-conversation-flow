@@ -15,7 +15,8 @@ const tmpHome = path.join(os.tmpdir(), 'cf-harness-' + process.pid);
 process.env.DSH_HOME = tmpHome;
 await fsp.rm(tmpHome, { recursive: true, force: true });
 
-const { apply } = await import('../../dev/index.js');
+const hostModule = await import('../../dev/index.js');
+const { apply } = hostModule;
 
 /* ------------------------------------------------------------------ mocks */
 
@@ -202,6 +203,13 @@ function check(name, fn) {
 }
 
 /* ------------------------------------------------------------------ cases */
+
+check('plugin declares the services it needs before apply (boot-order guard)', async () => {
+  // 回归保护：路由要 webServer、工具要 tools。如果 inject 为空，Loader 并发启动时
+  // apply 可能早于这两个服务挂载，插件就会静默失效（面板能开、左侧对话列表为空）。
+  assert.deepEqual(hostModule.inject, ['tools', 'webServer']);
+  assert.equal(hostModule.name, 'conversation-flow');
+});
 
 check('route registered on /conversation-flow prefix', async () => {
   assert.equal(routes.length, 1);
@@ -780,6 +788,8 @@ check('topics: a timed node in another topic still fires', async () => {
   agentsById.set('session-beta', makeAgent('session-beta', 'idle'));
   const created = await call('POST', '/conversation-flow/api/topic', { action: 'create', name: '定时主题' });
   const topicId = created.json.value.activeTopicId;
+  // 先取基线再保存：40ms 的 ticker 可能在路由 await persist 期间就触发，基线晚取会漏算。
+  const before = delivered.length;
   await call('POST', '/conversation-flow/api/graph', {
     nodes: [
       {
@@ -796,7 +806,6 @@ check('topics: a timed node in another topic still fires', async () => {
     ],
     edges: [{ id: 'e-timed', source: 'n-timed', target: 'n-target', kind: 'summary', auto: false }],
   });
-  const before = delivered.length;
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(delivered.length, before + 1, 'the ticker runs nodes of a non-active topic');
   assert.match(delivered[delivered.length - 1].message.content[0].text, /定时主题的输出/);
