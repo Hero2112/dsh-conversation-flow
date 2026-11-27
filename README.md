@@ -1,6 +1,7 @@
 # 对话流 · `@local/dsh-conversation-flow`
 
 > **GitHub 仓库**：https://github.com/Hero2112/dsh-conversation-flow
+> **开源，MIT 许可** · [安装说明](INSTALL.md) · [Releases](https://github.com/Hero2112/dsh-conversation-flow/releases)
 > **当前版本**：1.4.1 · **最近发布**：2026-11-06
 > **安装目录**：`releases/v1.4.1/`（冻结快照，**正在运行的就是它**）· 开发改 `dev/`
 
