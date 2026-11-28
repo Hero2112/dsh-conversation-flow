@@ -1,85 +1,156 @@
-# 对话流 · `@local/dsh-conversation-flow`
+# 对话流 · Conversation Flow
 
-> **GitHub 仓库**：https://github.com/Hero2112/dsh-conversation-flow
-> **开源，MIT 许可** · [安装说明](INSTALL.md) · [Releases](https://github.com/Hero2112/dsh-conversation-flow/releases)
-> **当前版本**：1.4.1 · **最近发布**：2026-11-06
-> **安装目录**：`releases/v1.4.1/`（冻结快照，**正在运行的就是它**）· 开发改 `dev/`
+基于 **React Flow** 的 DSH 插件：把多个对话放在同一张图上，管理对话之间的**数据传输**与**协调工作**。
 
-DSH（DeepSeek Harness）Web GUI 插件：把多个对话放进 **React Flow** 画布，管理对话之间的**数据传输**与**协调调度**；支持**多主题**——每个主题是一张独立画布，也就是一条独立工作流。
+## 入口
 
-- 侧边栏入口：`sidebar.panellist`（`id: conversation-flow`，排在「插件」「定时任务」之后）
-- 主面板：keyed `main` slot（`key: conversation-flow`）
-- 数据文件：`$DSH_HOME/conversation-flow/graph.json`（v2：`topics[]` + `activeTopicId`）
+侧边栏出现一个新的面板图标「对话流」（`sidebar.panellist`），点击后进入主面板页面（keyed `main` slot，panel id `conversation-flow`）。
 
-## 能力一览
+## 能做什么
 
 | 能力 | 说明 |
 |---|---|
-| 多主题 | 顶部主题条：**切换 / 新建 / 改名 / 删除**；一个主题 = 一张独立工作流画布，节点、通道、节点属性、外观都按主题隔离；定时与自动协调跨全部主题运行 |
-| 画布 | 节点 = 对话，连线 = 数据通道；拖拽 / 缩放 / 小地图；背景色、网格样式/间距/颜色可换并持久化 |
-| 建通道 | 从节点右侧圆点拖到另一个节点建立通道，同一对对话只允许一条 |
-| 传输内容 | 最后一轮回答 / 最近 N 轮 / 完整对话记录 / 自定义文本 |
-| 手动传输 | 节点「发送数据」、通道「立即传输」、顶部「立即传输」，并有最近 40 条传输记录（来源：手动/自动/定时） |
-| 自动协调 | 源对话每轮结束（`turn/end` · `completed`）自动推送到目标对话，15 秒防回环 |
-| 节点属性驱动运行 | **节点作用** → 执行时投进该对话的任务指令（真正唤醒它干活）；**输出内容** → 下游固定负载；**是否定时** → 按间隔自动执行 |
-| 执行中状态 | `pendingAt` 等待本轮产出，卡片/面板显示「执行中」，本轮结束兑现推送并清除 |
-| Agent 工具 | `conversation_flow`：`list / topics / topic / state / node / run / transfer / link / coordinate` |
+| 多主题 | 画布顶部主题条：**切换 / 新建 / 改名 / 删除**主题；一个主题 = 一张独立工作流画布（节点、通道、节点属性、外观都按主题各自保存），等于在一个插件里管理多条工作流 |
+| 画布 | React Flow 图：节点 = 对话，连线 = 数据通道；支持拖拽、缩放、平移、小地图、框选 |
+| 画布外观 | 右上角「画布」按钮打开设置：**背景色**（7 个预设 + 任意取色，或跟随主题）、**网格线开关**、**网格样式**（点阵/横线/交叉）、**间距**、**网格颜色**（自动按背景明暗取色，也可自选） |
+| 建通道 | 从节点右侧圆点拖到另一个节点即可建立通道（同一对对话只允许一条） |
+| 节点设置 | 点击节点，右侧面板可编辑 **节点作用**、**输出内容**、**是否定时**（每 N 分钟 1–720）；三者都实际驱动运行：作用决定投给该对话的任务指令、输出决定下游负载、定时决定何时执行；面板显示上次运行/执行中状态并可「立即执行」 |
+| 传输内容 | 每条通道可选：**最后一轮回答** / **最近 N 轮** / **完整记录** / **自定义文本** |
+| 手动传输 | 节点上的「发送数据」按钮把该节点的所有出口一次推送；检查器里也可单条「立即传输」 |
+| 自动协调 | 打开通道的「自动协调」开关后，**源对话每轮结束时**（`turn/end` 且 `reason.kind === 'completed'`）自动把内容推送到目标对话 |
+| 定时触发 | 节点开启定时后，Host 每 20 秒扫一次：到间隔就**执行节点**——有「作用」先驱动该对话干活，再把结果（或固定输出）推给全部下游通道 |
+| 传输记录 | 画布下方显示最近 40 条传输（成功/失败、字数、时间、来源：手动/自动/定时） |
+| 落盘 | 主题与画布保存在 `$DSH_HOME/conversation-flow/graph.json`（v2：`topics[]` + `activeTopicId`），重启后恢复 |
+| Agent 工具 | `conversation_flow`（action: `list` / `topics` / `topic` / `state` / `node` / `run` / `transfer` / `link` / `coordinate`），与 UI 共用同一份实现 |
 
-功能细节、限制与接口见 [dev/README.md](dev/README.md)。
+## 多主题（v1.4）
 
-## 目录结构（按插件库规范）
+**主题 = 一张独立的工作流画布。** 顶部主题条提供：下拉切换、`＋新建主题`、`改名`、`删除`（二次确认，且至少要留一个）。
+
+- 每个主题各自保存：节点、通道、节点的作用/输出/定时、画布外观（背景色/网格）；节点 id 只在主题内唯一。
+- **跨主题运行**：定时任务与自动协调遍历全部主题——切到别的工作流时，其它主题的定时节点照样按间隔执行。
+- 兼容旧数据：旧版单画布 `graph.json` 会迁移为「默认主题」，节点与连线不丢。
+- 接口：`GET /api/state` 返回 `topics` + `activeTopicId`（`graph` 是当前主题）；`POST /api/topic` 传 `{ action: create|select|rename|delete, topicId?, name? }`；`/api/graph`、`/api/node`、`/api/run` 可用 `topicId` 指定主题。
+
+## 数据是怎么"过去"的
+
+传输把源对话日志中的文本打包成一条 **user 消息**投递到目标对话的 Agent inbox：
 
 ```
-插件/conversation-flow/
-├── README.md                本文件：插件总述（阅读入口）
-├── CHANGELOG.md             版本总表
-├── versions/
-│   ├── v1.3.0.md            历史版本说明
-│   ├── v1.4.0.md            多主题画布
-│   └── v1.4.1.md            当前版本：修复启动顺序导致的面板空数据
-├── releases/
-│   ├── v1.3.0/              历史冻结快照
-│   ├── v1.4.0/              历史冻结快照
-│   └── v1.4.1/              当前冻结快照：完整可安装包（package.json client.js index.js cordis.patch.yml icon.svg locale/ README.md INSTALL.md）
-├── dist/
-│   ├── conversation-flow-1.3.0.zip
-│   ├── conversation-flow-1.4.0.zip
-│   └── conversation-flow-1.4.1.zip   分发包（顶层 conversation-flow/，永不覆盖）
-├── dev/                     下一版工作副本（构建产物 client.js 也输出到这里）
-└── build/                   esbuild 构建脚本 + 源码 + 测试 + API 参考文档
-    ├── src/{client.jsx,page.jsx,shared.js}
-    ├── build.mjs            → 输出 ../dev/client.js
-    ├── test/{host.test.mjs,render.smoke.mjs}
-    └── docs/                Host / Client 接口调研报告
+【对话流·最后一轮回答】来自对话「架构讨论」（自动协调）
+
+<源对话正文>
 ```
 
-## 安装与生效
+- 通过 `agent.followup(message)` 投递：它是 `next-turn` 且会唤醒目标对话，因此目标会真的"收到并开始处理"。
+- 消息是一条标准 `user` 消息（`source: { kind: 'user' }`），抬头写明了来源对话与本次负载类型，在目标对话的 GUI 里可读、可追溯。
 
-```text
-plugin_manager
-  action: install_bundle
-  target: <本仓库>\releases\v1.4.1
+## 画布外观（v1.1）
+
+画布右上角「画布」按钮打开设置面板，全部即时生效并写进 `graph.json` 的 `canvas` 字段：
+
+```json
+{ "bgColor": "#1b2230", "grid": true, "variant": "cross", "gap": 28, "gridColor": "#445566" }
 ```
 
-- 已装旧版：先 `remove_bundle`（target `@local/dsh-conversation-flow`），再 `install_bundle` 新目录；
-- **安装路径变化后必须完全退出并重启 DSH**（只刷新页面不够），否则侧边栏图标与面板不出现；
-- 只改 `client.js`：刷新页面即可；只改 `index.js`：停用/启用插件即可。
+| 设置 | 取值 |
+|---|---|
+| 背景色 | `null` = 跟随 Harness 主题；预设（深墨/石墨/石板/森林/沙色/白）+ 任意自定义颜色 |
+| 网格线 | 开 / 关（关掉后仍保留背景色） |
+| 网格样式 | `dots` 点阵 / `lines` 横线 / `cross` 交叉 |
+| 间距 | 12 / 16 / 22 / 28 / 36 / 48 px |
+| 网格颜色 | `null` = 自动（按背景明暗选深/浅网格），也可自选 |
 
-> **本机现状**：DSH 里跑的这份是通过 `dsh-plugins/conversation-flow` 安装的，而该目录是一个指向 `插件/conversation-flow/releases/v1.4.1` 的**目录联接（junction）**。这样做是为了让"源码搬进插件库、安装路径保持稳定"，从而**不必重启 DSH** 客户端就能继续显示侧边栏图标与面板；升级新版本时只需把 junction 目标换成新 release 再重装同一路径。
+Host 侧会校验并规范化这些值（非法颜色/样式/间距回落到默认），所以直接调 API 写也不会把画布搞坏；只保存节点和连线时不会覆盖已有外观。
 
-详见 [releases/v1.4.1/INSTALL.md](releases/v1.4.1/INSTALL.md)。
+## 节点设置：三个字段都真正驱动运行（v1.3）
+
+**点击画布上的节点**，右侧面板从「连线设置」切换为「节点设置」。这三个字段不是备注，它们决定节点**怎么跑**：
+
+### 一次「执行」的完整过程
+
+```
+定时到点 / 点「立即执行」/ 工具 run
+        │
+        ▼
+① 有「节点作用」→ 往该节点自己的对话投递任务消息并唤醒它（agent.followup）
+      【对话流·节点执行】你在画布中的职责：<role>
+      （本次由定时任务触发，间隔 N 分钟）
+      → 这条消息会真的让该对话开始干活，轮次结束后回复自动进日志
+        │
+        ▼
+② 同时判断「输出内容」：
+      非空 → 立即把这段固定文本推给该节点的所有下游通道（不等对话）
+      空   → 进入「执行中 pending」，等这个对话本轮结束（turn/end · completed）
+              再把它刚产出的内容推给下游（来源标记「定时触发」）
+```
+
+| 字段 | 对运行的实际影响 |
+|---|---|
+| 节点作用 `role` | 决定执行时**往该对话里投递什么任务指令**（`agent.followup` 唤醒该对话，措辞就是这段作用）。留空则该节点退化为纯数据推送，不驱动对话 |
+| 输出内容 `output` | 决定**推给下游的内容**：非空 = 固定文本，立即推送；空 = 取对话产出（按连线类型） |
+| 是否定时 `schedule` | 决定**什么时候执行**：开启后 Host 每 20 秒扫描，到 `everyMinutes` 就执行一次；关闭只能手动 / 工具触发 |
+
+配套状态：
+
+- `lastRunAt` / `pendingAt` 都会落盘；`pendingAt` 表示「已驱动、等待该轮产出」，超过 10 分钟自动失效，界面与 `state` 工具都会显示「执行中」。
+- 被驱动的对话本轮结束时，先完成节点自己的下游推送，再走全局「自动协调」——两者共用 15 秒防回环，不会重复推两次。
+- 目标对话不在线、节点对话没打开、没有下游通道，都只记日志/返回明确错误，不会静默。
+
+节点对象在 `graph.json` 里的样子：
+
+```json
+{ "id": "n1", "sessionId": "session-…", "x": 40, "y": 40,
+  "role": "架构决策", "output": "",
+  "schedule": { "enabled": true, "everyMinutes": 15 },
+  "lastRunAt": 1760000000000, "pendingAt": 0 }
+```
+
+接口与工具：
+
+- `POST /api/node` 改 role/output/schedule；`POST /api/run` 立即执行（返回 `kicked` / `pending` / `sent` / `failed` / `error`）。
+- `conversation_flow` 的 `node`、`run` 两个 action 与 UI 等价；`state` 会输出每个节点的作用、是否固定输出、定时与「执行中」状态。
+
+## 限制（重要）
+
+1. **目标对话必须是打开状态**（该会话有活动的 Agent）。DSH 没有面向插件的"向未打开会话投递"的公开接口；这种情况下传输会返回 `target-not-live`，并提示先在 GUI 打开目标对话。
+2. **防回环**：同一对 `源→目标` 在 15 秒内不会重复自动/定时推送；自动协调只响应"完成"的轮次。
+3. 传输内容是**文本**（text block），图片/附件不随传输搬移。
+4. 路由 `/conversation-flow/api/*` 不在 DSH 的 `/api` 鉴权范围内（携带方没有全局鉴权）；插件自身拒绝 `sec-fetch-site: cross-site` 的请求，且默认只监听 loopback。
+5. 被节点驱动的那一轮会**消耗模型额度**（等于你在那个对话里手动发了一条消息），定时频率请按需设置。
+
+## 结构
+
+- `index.js` — Host 半：会话目录读取（`sessionQuery` / `sessionProjectionCache` / `agents`）、投递、自动协调触发（`session/event` → `turn/end`）、HTTP 路由、`conversation_flow` 工具、图定义落盘。
+- `client.js` — 浏览器半：`window.__ModuleLoader__.load` 工厂，注册侧边栏图标 + 主面板页面；React Flow 及其纯 JS 依赖已内联，`react` / `react-dom` 使用外壳的共享模块表。
+- `client.js` 由 `../build/`（esbuild 构建脚本 + 测试）生成，构建产物不要手改。
+- 文案：`locale/zh.json`、`locale/en.json`（插件清单展示用 meta）。页面内文案在 `client.js` 内随 `ctx.locale` 切换。
+
+## 自检接口
+
+`GET /conversation-flow/api/state` 返回的 `diagnostics` 字段给出 Host 半的自检结果：
+
+```json
+{ "tool": "registered", "toolError": null, "route": "/conversation-flow" }
+```
+
+`tool` 为 `registered` 表示 `conversation_flow` 工具已挂载；`failed` 时 `toolError` 是注册错误原文，`no-service` 表示当前 profile 没有 tools 服务。
 
 ## 开发
 
 ```powershell
-cd build
-pnpm install        # 首次
-pnpm run build      # 重新生成 ../dev/client.js
-pnpm test           # Host mock 测试 35 项 + 页面服务端渲染测试 7 项
+cd ../build
+# 依赖（首次）
+pnpm install
+# 重新生成 ../conversation-flow/client.js
+pnpm run build
+# 测试：Host 半（mock 服务，31 项）+ 页面服务端渲染（6 项）
+pnpm test
 ```
 
-发版流程：`dev/` 验证通过 → 整份复制到 `releases/vX.Y.Z/` → 写 `versions/vX.Y.Z.md` → `CHANGELOG.md` 追加 → 打包 `dist/<插件名>-vX.Y.Z.zip` → 让 Agent 安装新 release 目录。
+生效方式：
 
-## 提交约定
+- **Client 半**（`client.js`）：改完重新 build，刷新 GUI 页面即可。
+- **Host 半**（`index.js`）：ESM 模块在进程内缓存，需要 `plugin_manager` 里停用再启用该插件（或重启 GUI）才会加载新代码。
+- 图定义与传输记录：`$DSH_HOME/conversation-flow/graph.json`（`$DSH_HOME` 默认 `~/.dsh`）。删除该文件并重新加载插件即可清空画布。
 
-每次修改**单独提交一次**，提交信息用中文写清楚本次新增/修改了哪些功能；同步更新 `CHANGELOG.md` 与 `versions/`；提交后推送到 GitHub 仓库。

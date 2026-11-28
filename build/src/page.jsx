@@ -48,7 +48,9 @@ function flowStyles(t) {
 .cf-node-body { padding: 0 10px 8px; }
 .cf-node-meta { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: ${t.textFaint}; margin-bottom: 6px; }
 .cf-node-preview { font-size: 11px; line-height: 1.45; color: ${t.textMuted}; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; min-height: 15px; }
-.cf-node-role { font-size: 10.5px; line-height: 1.35; color: ${t.accent}; margin: -2px 0 5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cf-node-role { position: relative; font-size: 10.5px; line-height: 1.35; color: ${t.accent}; margin: -2px 0 5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cf-role-tip { display: none; position: absolute; left: 0; right: 0; bottom: calc(100% + 7px); z-index: 60; padding: 7px 9px; border-radius: ${t.radiusSm}; border: 1px solid ${t.borderStrong}; background: ${t.surface}; color: ${t.text}; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; box-shadow: 0 10px 26px rgba(0,0,0,.3); pointer-events: none; -webkit-line-clamp: unset; }
+.cf-node-role:hover .cf-role-tip, .cf-node-role:focus-within .cf-role-tip { display: block; }
 .cf-node-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .cf-badge { font-size: 9.5px; line-height: 1; padding: 3px 5px; border-radius: 999px; border: 1px solid ${t.border}; background: ${t.surfaceMuted}; color: ${t.textMuted}; }
 .cf-badge.schedule { border-color: ${t.accent}; color: ${t.accent}; }
@@ -57,7 +59,10 @@ function flowStyles(t) {
 .cf-btn { font: inherit; font-size: 10.5px; line-height: 1; padding: 5px 7px; border-radius: ${t.radiusSm}; border: 1px solid ${t.border}; background: ${t.surfaceMuted}; color: ${t.textMuted}; cursor: pointer; white-space: nowrap; }
 .cf-btn:hover { background: ${t.surfaceHover}; color: ${t.text}; }
 .cf-btn.primary { background: ${t.accentSoft}; border-color: ${t.accent}; color: ${t.text}; }
-.cf-btn.danger:hover { border-color: ${t.danger}; color: ${t.danger}; }
+.cf-btn.danger { border-color: ${t.danger}; color: ${t.danger}; }
+.cf-btn.danger:hover { background: ${t.surfaceHover}; border-color: ${t.danger}; color: ${t.danger}; }
+.cf-btn.danger-armed { background: ${t.danger}; border-color: ${t.danger}; color: #fff; }
+.cf-foot-sep { width: 1px; align-self: stretch; background: ${t.border}; margin: 0 2px 0 auto; }
 .cf-btn:disabled { opacity: .5; cursor: default; }
 .cf-handle { width: 8px; height: 8px; border-radius: 50%; background: ${t.surface}; border: 1.5px solid ${t.textFaint}; }
 .cf-handle:hover { border-color: ${t.accent}; background: ${t.accent}; }
@@ -123,7 +128,12 @@ function ConversationNode({ data, selected }) {
         <span className="cf-node-title" title={data.title}>{data.title}</span>
       </div>
       <div className="cf-node-body">
-        {data.role ? <div className="cf-node-role" title={data.role}>{data.role}</div> : null}
+        {data.role ? (
+          <div className="cf-node-role" tabIndex={0}>
+            {data.role}
+            <span className="cf-role-tip" role="tooltip">{data.role}</span>
+          </div>
+        ) : null}
         <div className="cf-node-meta">
           <span>{statusText}</span>
           {data.turns > 0 ? <><span>·</span><span>{data.turns} {data.t.round}</span></> : null}
@@ -145,7 +155,8 @@ function ConversationNode({ data, selected }) {
         <button type="button" className="cf-btn primary" disabled={!data.outCount} onClick={data.onSend}>
           {data.t.send}{data.outCount ? ' (' + data.outCount + ')' : ''}
         </button>
-        <button type="button" className="cf-btn danger" onClick={data.onRemove}>×</button>
+        <span className="cf-foot-sep" />
+        <button type="button" className="cf-btn danger" title={data.t.remove} onClick={data.onRemove}>×</button>
       </div>
       <Handle type="source" position={Position.Right} className="cf-handle" />
     </div>
@@ -1019,9 +1030,11 @@ function FlowPage({ ctx, t, tokens, sessions, graph, canvas, topics, activeTopic
             >
               {t.renameTopic}
             </button>
+            <span style={{ flex: 1 }} />
             <button
               type="button"
-              className={'cf-btn' + (confirmDelete ? ' danger' : '')}
+              className={'cf-btn danger' + (confirmDelete ? ' danger-armed' : '')}
+              title={t.deleteTopic}
               onClick={() => {
                 if (!confirmDelete) {
                   setConfirmDelete(true);

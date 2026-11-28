@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-conversation-flow",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
   "description": "React Flow canvas for DSH: move data between conversations and coordinate them",
